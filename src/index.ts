@@ -6,6 +6,7 @@ import 'dotenv/config'
 
 const NWS_API_BASE = "https://api.weather.gov";
 const USER_AGENT = "weather-app/1.0";
+import dotenv from 'dotenv'
 
 
 
@@ -241,6 +242,39 @@ async function makeNWSRequest<T>(url: string): Promise<T | null> {
           'Content-Type': 'application/json',
         },
         body: requestBody,
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status} - ${response.statusText}`);
+      }
+
+      const responseData = await response.json();
+      
+      return {
+        success: true,
+        data: responseData,
+        status: response.status,
+      };
+    } catch (e) {
+      return {
+        success: false,
+        error: {
+          message: e instanceof Error ? e.message : 'Unknown error occurred'
+        }
+      };
+    }
+  };
+
+  const fetchKeyNameAndResources = async ({codespaceUrl, githubPatToken}: {codespaceUrl: string, githubPatToken: string}): Promise<any | Error> => {
+    try {
+      const response = await fetch(`${codespaceUrl}/fetch_key_name_and_resources`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': githubPatToken,
+          'x-github-token': githubPatToken,
+        },
+        body: JSON.stringify({}),
       });
 
       if (!response.ok) {
@@ -580,6 +614,82 @@ server.tool(
                   url: port3000Url
                 },
                 execution_result: executeResponse
+              }, null, 2),
+            },
+          ],
+        };
+    },
+  );
+
+  server.tool(
+    "fetch-key-name-and-resources",
+    "Fetch key names and resources from active codespace port 3000",
+    async () => {
+        // First, get active codespaces
+        const codespacesResponse = await listActiveCodespacesForRepo({
+            token: githubPatToken
+        });
+
+        if (!codespacesResponse.success) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  success: false,
+                  error: "Failed to fetch active codespaces",
+                  details: codespacesResponse
+                }, null, 2),
+              },
+            ],
+          };
+        }
+
+        if (codespacesResponse.codespaces.length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  success: false,
+                  error: "No active codespaces found for codespace-executor repo"
+                }, null, 2),
+              },
+            ],
+          };
+        }
+
+        // Use the first active codespace
+        const firstCodespace = codespacesResponse.codespaces[0];
+        const codespacesPortUrl = generateCodespacePortUrl(firstCodespace, 3000);
+
+        if (codespacesPortUrl.startsWith('Error')) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  success: false,
+                  error: codespacesPortUrl
+                }, null, 2),
+              },
+            ],
+          };
+        }
+
+        // Fetch key names and resources
+        const response = await fetchKeyNameAndResources({codespaceUrl: codespacesPortUrl, githubPatToken});
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                codespace_used: {
+                  name: firstCodespace.name,
+                  url: codespacesPortUrl
+                },
+                fetch_result: response
               }, null, 2),
             },
           ],
