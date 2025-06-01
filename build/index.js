@@ -209,6 +209,40 @@ const fetchKeyNameAndResources = async ({ codespaceUrl, githubPatToken }) => {
         };
     }
 };
+const stopCodespace = async ({ codespaceName, token, }) => {
+    try {
+        const octokit = new Octokit({
+            auth: token,
+        });
+        const response = await octokit.rest.codespaces.stopForAuthenticatedUser({
+            codespace_name: codespaceName,
+        });
+        return {
+            success: true,
+            codespace: response.data,
+            message: `Codespace ${codespaceName} has been stopped`,
+        };
+    }
+    catch (e) {
+        if (e && typeof e === 'object' && 'response' in e) {
+            const error = e;
+            return {
+                success: false,
+                error: {
+                    message: error.message,
+                    status: error.response.status,
+                    headers: error.response.headers
+                }
+            };
+        }
+        return {
+            success: false,
+            error: {
+                message: e instanceof Error ? e.message : 'Unknown error occurred'
+            }
+        };
+    }
+};
 // Register weather tools
 server.tool("get-alerts", "Get weather alerts for a state", {
     state: z.string().length(2).describe("Two-letter state code (e.g. CA, NY)"),
@@ -467,7 +501,7 @@ server.tool("execute-code-on-active-codespace", "Find the first active codespace
         ],
     };
 });
-server.tool("fetch-key-name-and-resources", "Fetch key names and resources from active codespace port 3000", async () => {
+server.tool("fetch-key-name-and-resources", "If you need to use any code that requires a specific npm or sdk or an API key, use this to check what is available to you before you write and execute the code", async () => {
     // First, get active codespaces
     const codespacesResponse = await listActiveCodespacesForRepo({
         token: githubPatToken
@@ -527,6 +561,76 @@ server.tool("fetch-key-name-and-resources", "Fetch key names and resources from 
                         url: codespacesPortUrl
                     },
                     fetch_result: response
+                }, null, 2),
+            },
+        ],
+    };
+});
+server.tool("stop-codespace", "Stop a specific GitHub codespace by name", {
+    codespace_name: z.string().describe("The name of the codespace to stop"),
+}, async ({ codespace_name }) => {
+    const response = await stopCodespace({
+        codespaceName: codespace_name,
+        token: githubPatToken
+    });
+    return {
+        content: [
+            {
+                type: "text",
+                text: JSON.stringify(response, null, 2),
+            },
+        ],
+    };
+});
+server.tool("stop-active-codespace", "Find and stop the first active codespace-executor codespace", async () => {
+    // First, get active codespaces
+    const codespacesResponse = await listActiveCodespacesForRepo({
+        token: githubPatToken
+    });
+    if (!codespacesResponse.success) {
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: JSON.stringify({
+                        success: false,
+                        error: "Failed to fetch active codespaces",
+                        details: codespacesResponse
+                    }, null, 2),
+                },
+            ],
+        };
+    }
+    if (codespacesResponse.codespaces.length === 0) {
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: JSON.stringify({
+                        success: false,
+                        error: "No active codespaces found for codespace-executor repo"
+                    }, null, 2),
+                },
+            ],
+        };
+    }
+    // Use the first active codespace
+    const firstCodespace = codespacesResponse.codespaces[0];
+    // Stop the codespace
+    const stopResponse = await stopCodespace({
+        codespaceName: firstCodespace.name,
+        token: githubPatToken
+    });
+    return {
+        content: [
+            {
+                type: "text",
+                text: JSON.stringify({
+                    codespace_stopped: {
+                        name: firstCodespace.name,
+                        web_url: firstCodespace.web_url
+                    },
+                    stop_result: stopResponse
                 }, null, 2),
             },
         ],
