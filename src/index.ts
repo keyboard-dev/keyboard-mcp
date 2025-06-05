@@ -102,6 +102,8 @@ async function makeNWSRequest<T>(url: string): Promise<T | null> {
     codespaceUrl: string;
     code: string;
     token: string;
+    environmentVariablesNames: string[];
+    docResources: string[];
   }
 
   const createInteractiveDocsCodespace = async ({
@@ -225,13 +227,17 @@ async function makeNWSRequest<T>(url: string): Promise<T | null> {
   const executeCodeOnCodespace = async ({
     codespaceUrl,
     code,
+    environmentVariablesNames,
+    docResources,
     token,
   }: ExecuteCodeParams): Promise<any | Error> => {
     try {
       const executeUrl = `${codespaceUrl}/execute`;
       
       const requestBody = JSON.stringify({
-        code: code
+        code: code,
+        environmentVariablesNames,
+        docResources
       });
 
       const response = await fetch(executeUrl, {
@@ -340,138 +346,7 @@ async function makeNWSRequest<T>(url: string): Promise<T | null> {
     }
   };
 
-  // Register weather tools
-server.tool(
-    "get-alerts",
-    "Get weather alerts for a state",
-    {
-      state: z.string().length(2).describe("Two-letter state code (e.g. CA, NY)"),
-    },
-    async ({ state }) => {
-      const stateCode = state.toUpperCase();
-      const alertsUrl = `${NWS_API_BASE}/alerts?area=${stateCode}`;
-      const alertsData = await makeNWSRequest<AlertsResponse>(alertsUrl);
   
-      if (!alertsData) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "Failed to retrieve alerts data",
-            },
-          ],
-        };
-      }
-  
-      const features = alertsData.features || [];
-      if (features.length === 0) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `No active alerts for ${stateCode}`,
-            },
-          ],
-        };
-      }
-  
-      const formattedAlerts = features.map(formatAlert);
-      const alertsText = `Active alerts for ${stateCode}:\n\n${formattedAlerts.join("\n")}`;
-  
-      return {
-        content: [
-          {
-            type: "text",
-            text: alertsText,
-          },
-        ],
-      };
-    },
-  );
-  
-  server.tool(
-    "get-forecast",
-    "Get weather forecast for a location",
-    {
-      latitude: z.number().min(-90).max(90).describe("Latitude of the location"),
-      longitude: z.number().min(-180).max(180).describe("Longitude of the location"),
-    },
-    async ({ latitude, longitude }) => {
-      // Get grid point data
-      const pointsUrl = `${NWS_API_BASE}/points/${latitude.toFixed(4)},${longitude.toFixed(4)}`;
-      const pointsData = await makeNWSRequest<PointsResponse>(pointsUrl);
-  
-      if (!pointsData) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Failed to retrieve grid point data for coordinates: ${latitude}, ${longitude}. This location may not be supported by the NWS API (only US locations are supported).`,
-            },
-          ],
-        };
-      }
-  
-      const forecastUrl = pointsData.properties?.forecast;
-      if (!forecastUrl) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "Failed to get forecast URL from grid point data",
-            },
-          ],
-        };
-      }
-  
-      // Get forecast data
-      const forecastData = await makeNWSRequest<ForecastResponse>(forecastUrl);
-      if (!forecastData) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "Failed to retrieve forecast data",
-            },
-          ],
-        };
-      }
-  
-      const periods = forecastData.properties?.periods || [];
-      if (periods.length === 0) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "No forecast periods available",
-            },
-          ],
-        };
-      }
-  
-      // Format forecast periods
-      const formattedForecast = periods.map((period: ForecastPeriod) =>
-        [
-          `${period.name || "Unknown"}:`,
-          `Temperature: ${period.temperature || "Unknown"}°${period.temperatureUnit || "F"}`,
-          `Wind: ${period.windSpeed || "Unknown"} ${period.windDirection || ""}`,
-          `${period.shortForecast || "No forecast available"}`,
-          "---",
-        ].join("\n"),
-      );
-  
-      const forecastText = `Forecast for ${latitude}, ${longitude}:\n\n${formattedForecast.join("\n")}`;
-  
-      return {
-        content: [
-          {
-            type: "text",
-            text: forecastText,
-          },
-        ],
-      };
-    },
-  );
 
 
   server.tool(
@@ -561,22 +436,40 @@ server.tool(
     {
       codespace_url: z.string().describe("The codespace port 3000 URL (e.g., https://username-repo-abc123-3000.app.github.dev)"),
       code: z.string().describe("The JavaScript/Node.js code to execute"),
+      environmentVariablesNames: z.array(z.string()).describe("The names of known environment variables in the codespace we can use in the code"),
+      installPackages: z.array(z.string()).describe("the list of npm packages already installed in the codespace we can use in the code"),
+      relevantDocs: z.array(z.string()).describe("The relevant docs to inform the code to execute"),
     },
-    async ({ codespace_url, code }) => {
+    async ({ codespace_url, code, environmentVariablesNames, installPackages, relevantDocs }) => {
         const response = await executeCodeOnCodespace({
             codespaceUrl: codespace_url,
             code: code,
+            environmentVariablesNames,
+            docResources: relevantDocs,
             token: githubPatToken
         });
+
+        // Check if there was an error and use MCP error handling
+        if (!response.success) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: `Error executing code on codespace: ${response.error?.message || 'Unknown error'}`,
+              },
+            ],
+          };
+        }
   
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(response, null, 2),
-          },
-        ],
-      };
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(response, null, 2),
+            },
+          ],
+        };
     },
   );
 
@@ -585,8 +478,11 @@ server.tool(
     "Find the first active codespace-executor codespace and execute code on it",
     {
       code: z.string().describe("The JavaScript/Node.js code to execute"),
+      environmentVariablesNames: z.array(z.string()).describe("The names of known environment variables in the codespace we can use in the code"),
+      installPackages: z.array(z.string()).describe("the list of npm packages already installed in the codespace we can use in the code"),
+      relevantDocs: z.array(z.string()).describe("The relevant docs to inform the code to execute")
     },
-    async ({ code }) => {
+    async ({ code, environmentVariablesNames, installPackages, relevantDocs }) => {
         // First, get active codespaces
         const codespacesResponse = await listActiveCodespacesForRepo({
             token: githubPatToken
@@ -594,14 +490,11 @@ server.tool(
 
         if (!codespacesResponse.success) {
           return {
+            isError: true,
             content: [
               {
                 type: "text",
-                text: JSON.stringify({
-                  success: false,
-                  error: "Failed to fetch active codespaces",
-                  details: codespacesResponse
-                }, null, 2),
+                text: `Failed to fetch active codespaces: ${codespacesResponse.error?.message || 'Unknown error'}`,
               },
             ],
           };
@@ -609,13 +502,11 @@ server.tool(
 
         if (codespacesResponse.codespaces.length === 0) {
           return {
+            isError: true,
             content: [
               {
                 type: "text",
-                text: JSON.stringify({
-                  success: false,
-                  error: "No active codespaces found for codespace-executor repo"
-                }, null, 2),
+                text: "No active codespaces found for codespace-executor repo",
               },
             ],
           };
@@ -627,13 +518,11 @@ server.tool(
 
         if (port3000Url.startsWith('Error')) {
           return {
+            isError: true,
             content: [
               {
                 type: "text",
-                text: JSON.stringify({
-                  success: false,
-                  error: port3000Url
-                }, null, 2),
+                text: `Error generating codespace URL: ${port3000Url}. Try using the fetch-environment-and-resources tool to get the environment variables and resources available to you before you write and execute the code`,
               },
             ],
           };
@@ -643,8 +532,23 @@ server.tool(
         const executeResponse = await executeCodeOnCodespace({
             codespaceUrl: port3000Url,
             code: code,
-            token: githubPatToken
+            token: githubPatToken,
+            environmentVariablesNames,
+            docResources: relevantDocs
         });
+
+        // Check if code execution failed
+        if (!executeResponse.success) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: `Error executing code on codespace ${firstCodespace.name}: ${executeResponse.error?.message || 'Unknown error'}`,
+              },
+            ],
+          };
+        }
 
         return {
           content: [
@@ -664,7 +568,7 @@ server.tool(
   );
 
   server.tool(
-    "fetch-key-name-and-resources",
+    "fetch-environment-and-resources",
     "If you need to use any code that requires a specific npm or sdk or an API key, use this to check what is available to you before you write and execute the code",
     async () => {
         // First, get active codespaces
@@ -674,14 +578,11 @@ server.tool(
 
         if (!codespacesResponse.success) {
           return {
+            isError: true,
             content: [
               {
                 type: "text",
-                text: JSON.stringify({
-                  success: false,
-                  error: "Failed to fetch active codespaces",
-                  details: codespacesResponse
-                }, null, 2),
+                text: `Failed to fetch active codespaces: ${codespacesResponse.error?.message || 'Unknown error'}`,
               },
             ],
           };
@@ -689,13 +590,11 @@ server.tool(
 
         if (codespacesResponse.codespaces.length === 0) {
           return {
+            isError: true,
             content: [
               {
                 type: "text",
-                text: JSON.stringify({
-                  success: false,
-                  error: "No active codespaces found for codespace-executor repo"
-                }, null, 2),
+                text: "No active codespaces found for codespace-executor repo",
               },
             ],
           };
@@ -707,13 +606,11 @@ server.tool(
 
         if (codespacesPortUrl.startsWith('Error')) {
           return {
+            isError: true,
             content: [
               {
                 type: "text",
-                text: JSON.stringify({
-                  success: false,
-                  error: codespacesPortUrl
-                }, null, 2),
+                text: `Error generating codespace URL: ${codespacesPortUrl}`,
               },
             ],
           };
@@ -721,6 +618,19 @@ server.tool(
 
         // Fetch key names and resources
         const response = await fetchKeyNameAndResources({codespaceUrl: codespacesPortUrl, githubPatToken});
+
+        // Check if fetching resources failed
+        if (!response.success) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: `Error fetching environment and resources: ${response.error?.message || 'Unknown error'}`,
+              },
+            ],
+          };
+        }
 
         return {
           content: [
@@ -750,15 +660,28 @@ server.tool(
             codespaceName: codespace_name,
             token: githubPatToken
         });
+
+        // Check if stopping codespace failed
+        if (!response.success) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: `Error stopping codespace ${codespace_name}: ${response.error?.message || 'Unknown error'}`,
+              },
+            ],
+          };
+        }
   
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(response, null, 2),
-          },
-        ],
-      };
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(response, null, 2),
+            },
+          ],
+        };
     },
   );
 
@@ -773,14 +696,11 @@ server.tool(
 
         if (!codespacesResponse.success) {
           return {
+            isError: true,
             content: [
               {
                 type: "text",
-                text: JSON.stringify({
-                  success: false,
-                  error: "Failed to fetch active codespaces",
-                  details: codespacesResponse
-                }, null, 2),
+                text: `Failed to fetch active codespaces: ${codespacesResponse.error?.message || 'Unknown error'}`,
               },
             ],
           };
@@ -788,13 +708,11 @@ server.tool(
 
         if (codespacesResponse.codespaces.length === 0) {
           return {
+            isError: true,
             content: [
               {
                 type: "text",
-                text: JSON.stringify({
-                  success: false,
-                  error: "No active codespaces found for codespace-executor repo"
-                }, null, 2),
+                text: "No active codespaces found for codespace-executor repo",
               },
             ],
           };
@@ -808,6 +726,19 @@ server.tool(
             codespaceName: firstCodespace.name,
             token: githubPatToken
         });
+
+        // Check if stopping codespace failed
+        if (!stopResponse.success) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: `Error stopping codespace ${firstCodespace.name}: ${stopResponse.error?.message || 'Unknown error'}`,
+              },
+            ],
+          };
+        }
 
         return {
           content: [

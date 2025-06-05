@@ -145,11 +145,13 @@ const generateCodespacePortUrl = (codespace, port = 3000) => {
         return `Error generating port URL: ${error instanceof Error ? error.message : 'Unknown error'}`;
     }
 };
-const executeCodeOnCodespace = async ({ codespaceUrl, code, token, }) => {
+const executeCodeOnCodespace = async ({ codespaceUrl, code, environmentVariablesNames, docResources, token, }) => {
     try {
         const executeUrl = `${codespaceUrl}/execute`;
         const requestBody = JSON.stringify({
-            code: code
+            code: code,
+            environmentVariablesNames,
+            docResources
         });
         const response = await fetch(executeUrl, {
             method: 'POST',
@@ -243,114 +245,6 @@ const stopCodespace = async ({ codespaceName, token, }) => {
         };
     }
 };
-// Register weather tools
-server.tool("get-alerts", "Get weather alerts for a state", {
-    state: z.string().length(2).describe("Two-letter state code (e.g. CA, NY)"),
-}, async ({ state }) => {
-    const stateCode = state.toUpperCase();
-    const alertsUrl = `${NWS_API_BASE}/alerts?area=${stateCode}`;
-    const alertsData = await makeNWSRequest(alertsUrl);
-    if (!alertsData) {
-        return {
-            content: [
-                {
-                    type: "text",
-                    text: "Failed to retrieve alerts data",
-                },
-            ],
-        };
-    }
-    const features = alertsData.features || [];
-    if (features.length === 0) {
-        return {
-            content: [
-                {
-                    type: "text",
-                    text: `No active alerts for ${stateCode}`,
-                },
-            ],
-        };
-    }
-    const formattedAlerts = features.map(formatAlert);
-    const alertsText = `Active alerts for ${stateCode}:\n\n${formattedAlerts.join("\n")}`;
-    return {
-        content: [
-            {
-                type: "text",
-                text: alertsText,
-            },
-        ],
-    };
-});
-server.tool("get-forecast", "Get weather forecast for a location", {
-    latitude: z.number().min(-90).max(90).describe("Latitude of the location"),
-    longitude: z.number().min(-180).max(180).describe("Longitude of the location"),
-}, async ({ latitude, longitude }) => {
-    // Get grid point data
-    const pointsUrl = `${NWS_API_BASE}/points/${latitude.toFixed(4)},${longitude.toFixed(4)}`;
-    const pointsData = await makeNWSRequest(pointsUrl);
-    if (!pointsData) {
-        return {
-            content: [
-                {
-                    type: "text",
-                    text: `Failed to retrieve grid point data for coordinates: ${latitude}, ${longitude}. This location may not be supported by the NWS API (only US locations are supported).`,
-                },
-            ],
-        };
-    }
-    const forecastUrl = pointsData.properties?.forecast;
-    if (!forecastUrl) {
-        return {
-            content: [
-                {
-                    type: "text",
-                    text: "Failed to get forecast URL from grid point data",
-                },
-            ],
-        };
-    }
-    // Get forecast data
-    const forecastData = await makeNWSRequest(forecastUrl);
-    if (!forecastData) {
-        return {
-            content: [
-                {
-                    type: "text",
-                    text: "Failed to retrieve forecast data",
-                },
-            ],
-        };
-    }
-    const periods = forecastData.properties?.periods || [];
-    if (periods.length === 0) {
-        return {
-            content: [
-                {
-                    type: "text",
-                    text: "No forecast periods available",
-                },
-            ],
-        };
-    }
-    // Format forecast periods
-    const formattedForecast = periods.map((period) => [
-        `${period.name || "Unknown"}:`,
-        `Temperature: ${period.temperature || "Unknown"}°${period.temperatureUnit || "F"}`,
-        `Wind: ${period.windSpeed || "Unknown"} ${period.windDirection || ""}`,
-        `${period.shortForecast || "No forecast available"}`,
-        "---",
-    ].join("\n"));
-    const forecastText = `Forecast for ${latitude}, ${longitude}:\n\n${formattedForecast.join("\n")}`;
-    return {
-        content: [
-            {
-                type: "text",
-                text: forecastText,
-            },
-        ],
-    };
-});
 server.tool("create-github-codespace", "create a github codespace", async () => {
     const response = await createInteractiveDocsCodespace({
         token: githubPatToken
@@ -415,10 +309,15 @@ server.tool("get-codespace-port-urls", "Get active codespaces for codespace-exec
 server.tool("execute-code-on-codespace", "Execute code on a specific codespace using its port 3000 URL", {
     codespace_url: z.string().describe("The codespace port 3000 URL (e.g., https://username-repo-abc123-3000.app.github.dev)"),
     code: z.string().describe("The JavaScript/Node.js code to execute"),
-}, async ({ codespace_url, code }) => {
+    environmentVariablesNames: z.array(z.string()).describe("The names of known environment variables in the codespace we can use in the code"),
+    installPackages: z.array(z.string()).describe("the list of npm packages already installed in the codespace we can use in the code"),
+    relevantDocs: z.array(z.string()).describe("The relevant docs to inform the code to execute"),
+}, async ({ codespace_url, code, environmentVariablesNames, installPackages, relevantDocs }) => {
     const response = await executeCodeOnCodespace({
         codespaceUrl: codespace_url,
         code: code,
+        environmentVariablesNames,
+        docResources: relevantDocs,
         token: githubPatToken
     });
     return {
@@ -432,7 +331,10 @@ server.tool("execute-code-on-codespace", "Execute code on a specific codespace u
 });
 server.tool("execute-code-on-active-codespace", "Find the first active codespace-executor codespace and execute code on it", {
     code: z.string().describe("The JavaScript/Node.js code to execute"),
-}, async ({ code }) => {
+    environmentVariablesNames: z.array(z.string()).describe("The names of known environment variables in the codespace we can use in the code"),
+    installPackages: z.array(z.string()).describe("the list of npm packages already installed in the codespace we can use in the code"),
+    relevantDocs: z.array(z.string()).describe("The relevant docs to inform the code to execute")
+}, async ({ code, environmentVariablesNames, installPackages, relevantDocs }) => {
     // First, get active codespaces
     const codespacesResponse = await listActiveCodespacesForRepo({
         token: githubPatToken
@@ -474,7 +376,7 @@ server.tool("execute-code-on-active-codespace", "Find the first active codespace
                     type: "text",
                     text: JSON.stringify({
                         success: false,
-                        error: port3000Url
+                        error: `Trying using the fetch-environment-and-resources tool to get the environment variables and resources available to you before you write and execute the code`
                     }, null, 2),
                 },
             ],
@@ -484,8 +386,11 @@ server.tool("execute-code-on-active-codespace", "Find the first active codespace
     const executeResponse = await executeCodeOnCodespace({
         codespaceUrl: port3000Url,
         code: code,
-        token: githubPatToken
+        token: githubPatToken,
+        environmentVariablesNames,
+        docResources: relevantDocs
     });
+    let messageFromTheCodespace;
     return {
         content: [
             {
@@ -501,7 +406,7 @@ server.tool("execute-code-on-active-codespace", "Find the first active codespace
         ],
     };
 });
-server.tool("fetch-key-name-and-resources", "If you need to use any code that requires a specific npm or sdk or an API key, use this to check what is available to you before you write and execute the code", async () => {
+server.tool("fetch-environment-and-resources", "If you need to use any code that requires a specific npm or sdk or an API key, use this to check what is available to you before you write and execute the code", async () => {
     // First, get active codespaces
     const codespacesResponse = await listActiveCodespacesForRepo({
         token: githubPatToken
