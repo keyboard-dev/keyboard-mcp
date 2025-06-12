@@ -21,9 +21,13 @@ import {
   createGoogleWorkstationConfig,
   GOOGLE_CLOUD_PROJECT_ID,
 } from "./google.js";
+import { WebSocketManager, WebSocketMessage } from './approver.js';
 
 let githubPatToken = process.env.GITHUB_PAT_TOKEN || "";
 const googleCloudProjectId = GOOGLE_CLOUD_PROJECT_ID;
+
+// Create WebSocketManager instance
+let wsManager: WebSocketManager | null = null;
 
 // Security evaluation mechanism
 let currentSecurityToken: string = "";
@@ -51,6 +55,119 @@ const server = new McpServer({
     tools: {},
   },
 });
+
+// Add WebSocket connection tool
+server.tool(
+  "connect-websocket",
+  "Connect to the Electron app's WebSocket server",
+  {
+    url: z.string().default("ws://localhost:8080").describe("WebSocket server URL"),
+    reconnectInterval: z.number().default(3000).describe("Reconnection interval in milliseconds"),
+    maxReconnectAttempts: z.number().default(5).describe("Maximum number of reconnection attempts"),
+    autoReconnect: z.boolean().default(true).describe("Whether to automatically reconnect")
+  },
+  async ({ url, reconnectInterval, maxReconnectAttempts, autoReconnect }) => {
+    try {
+      if (wsManager) {
+        wsManager.disconnect();
+      }
+
+      wsManager = new WebSocketManager({
+        url,
+        reconnectInterval,
+        maxReconnectAttempts,
+        autoReconnect
+      });
+
+      // Wait a bit to check connection status
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              status: wsManager.getConnectionState(),
+              message: "WebSocket manager initialized",
+              config: {
+                url,
+                reconnectInterval,
+                maxReconnectAttempts,
+                autoReconnect
+              }
+            }, null, 2)
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              error: error instanceof Error ? error.message : "Unknown error occurred"
+            }, null, 2)
+          }
+        ]
+      };
+    }
+  }
+);
+
+// Add message sending tool
+server.tool(
+  "send-websocket-message",
+  "Send a message through the WebSocket connection",
+  {
+    message: z.string().describe("Message content to send"),
+    type: z.string().default("message").describe("Message type"),
+    channel: z.string().optional().describe("Optional channel name"),
+    title: z.string().describe("Optional title"),
+  },
+  async ({ message, type, channel, title }) => {
+    try {
+      if (!wsManager) {
+        throw new Error("WebSocket not connected. Please use connect-websocket tool first.");
+      }
+
+      const success = wsManager.send(message, title);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success,
+              status: wsManager.getConnectionState(),
+              message: success ? "Message sent successfully" : "Message queued",
+              details: {
+                messageType: type,
+                channel,
+                timestamp: new Date().toISOString()
+              }
+            }, null, 2)
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              error: error instanceof Error ? error.message : "Unknown error occurred"
+            }, null, 2)
+          }
+        ]
+      };
+    }
+  }
+);
 
 interface CreateCodespaceParams {
   token: string;
@@ -1349,35 +1466,13 @@ server.tool(
   }
 );
 
-server.tool(
-  "create-google-workstation",
-  "Create a Google Cloud Workstation with specified machine type and optional startup script",
-  {
-    project_id: z.string().describe("Google Cloud Project ID"),
-    location: z.string().describe("Location/region (e.g., us-central1)"),
-    cluster_id: z.string().describe("Workstation cluster ID"),
-    config_id: z.string().describe("Workstation configuration ID"),
-    workstation_id: z.string().describe("Unique workstation ID"),
-    machine_type: z.string().optional().describe("Machine type (default: e2-standard-8)"),
-    container_image: z.string().optional().describe("Container image (default: code-oss)"),
-    startup_script: z.string().optional().describe("Optional startup script to run when workstation starts"),
-  },
-  async ({ project_id, location, cluster_id, config_id, workstation_id, machine_type, container_image, startup_script }) => {
-    const response = await createGoogleWorkstation({
-      projectId: project_id,
-      location,
-      clusterId: cluster_id,
-      configId: config_id,
-      workstationId: workstation_id,
-      machineType: machine_type,
-      containerImage: container_image,
-      startupScript: startup_script,
-    });
+async function main() {
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  console.error("Weather MCP Server running on stdio");
+}
 
-    if (!response.success) {
-      return {
-        isError: true,
-        content: [
-          {
-            type: "text",
-            text: `
+main().catch((error) => {
+  console.error("Fatal error in main():", error);
+  process.exit(1);
+});
