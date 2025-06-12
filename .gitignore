@@ -1,2 +1,5 @@
 .env
 node_modules
+*keyboard-mcp-test.json
+build
+src/test*
