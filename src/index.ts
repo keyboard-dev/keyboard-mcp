@@ -679,40 +679,153 @@ server.tool(
 
 server.tool(
   "evaluate",
-  "Get the current security evaluation token and instructions for writing safe code. ALWAYS call this before executing any code.",
+  "Get the current security evaluation token, WebSocket connection status, GitHub Codespace status, accessible third party API resources, and instructions for writing safe code. ALWAYS call this before executing any code.",
   async () => {
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({
-            success: true,
-            securityToken: currentSecurityToken,
-            instructions: {
-              "CRITICAL": "You MUST include this security token in ALL code execution requests",
-              "codeGuidelines": [
-                "1. Always validate user inputs and sanitize data",
-                "2. Never execute code that could harm the system or expose sensitive data",
-                "3. Use environment variables for sensitive information, never hardcode secrets",
-                "4. Limit file system access to necessary directories only",
-                "5. Avoid running shell commands unless absolutely necessary",
-                "6. Always handle errors gracefully and provide meaningful error messages",
-                "7. Use secure coding practices and follow the principle of least privilege"
-              ],
-              "securityChecks": [
-                "Check for malicious patterns (rm -rf, eval, exec, etc.)",
-                "Validate all file paths and prevent directory traversal",
-                "Ensure no sensitive data is logged or exposed",
-                "Verify network requests are to trusted endpoints only"
-              ],
-              "requiredParameter": "You must include 'security_token' parameter with the current token in all execute-code functions"
-            },
-            timestamp: new Date().toISOString(),
-            message: "Security evaluation complete. Use the provided token for code execution."
-          }, null, 2),
-        },
-      ],
+    // Check WebSocket connection status
+    const webSocketStatus = {
+      connected: wsManager !== null,
+      connectionState: wsManager ? wsManager.getConnectionState() : "disconnected",
+      message: wsManager ? "WebSocket manager is available" : "WebSocket not connected. Use 'connect-websocket' tool to establish connection."
     };
+
+    // Check GitHub Codespace status
+    let codespaceStatus = {
+      available: false,
+      count: 0,
+      message: "Failed to check codespace status",
+      activeCodespaces: []
+    };
+
+    try {
+      const codespacesResponse = await listActiveCodespacesForRepo({
+        token: githubPatToken
+      });
+
+      if (codespacesResponse.success) {
+        codespaceStatus = {
+          available: codespacesResponse.codespaces.length > 0,
+          count: codespacesResponse.codespaces.length,
+          message: codespacesResponse.codespaces.length > 0 
+            ? `${codespacesResponse.codespaces.length} active codespace(s) available for code execution`
+            : "No active codespaces found. Use 'create-github-codespace' tool to create one.  After that make sure to use the fetch-environment-and-resources tool to get the environment variables and resources available to you before you write and execute the code",
+          activeCodespaces: codespacesResponse.codespaces.map((cs: any) => ({
+            name: cs.name,
+            state: cs.state,
+            web_url: cs.web_url,
+            created_at: cs.created_at,
+            last_used_at: cs.last_used_at
+          }))
+        };
+      } else {
+        codespaceStatus.message = `Error checking codespaces: ${codespacesResponse.error?.message || 'Unknown error'}`;
+      }
+    } catch (error) {
+      codespaceStatus.message = `Error checking codespaces: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
+
+    // Prepare evaluation data
+    const evaluationData = {
+      success: true,
+      securityToken: currentSecurityToken,
+      connectionStatus: {
+        webSocket: webSocketStatus,
+        githubCodespaces: codespaceStatus
+      },
+      instructions: {
+        "CRITICAL": "You MUST include this security token in ALL code execution requests",
+        "codeGuidelines": [
+          "1. Always validate user inputs and sanitize data",
+          "2. Never execute code that could harm the system or expose sensitive data",
+          "3. Use environment variables for sensitive information, never hardcode secrets",
+          "4. Limit file system access to necessary directories only",
+          "5. Avoid running shell commands unless absolutely necessary",
+          "6. Always handle errors gracefully and provide meaningful error messages",
+          "7. Use secure coding practices and follow the principle of least privilege"
+        ],
+        "securityChecks": [
+          "Check for malicious patterns (rm -rf, eval, exec, etc.)",
+          "Validate all file paths and prevent directory traversal",
+          "Ensure no sensitive data is logged or exposed",
+          "Verify network requests are to trusted endpoints only"
+        ],
+        "requiredParameter": "You must include 'security_token' parameter with the current token in all execute-code functions"
+      },
+      timestamp: new Date().toISOString(),
+      message: "Security evaluation complete. Use the provided token for code execution."
+    };
+
+    // Send approval request via WebSocket if connected
+    if (wsManager) {
+      try {
+        const evaluationSummary = `
+Security Token: ${currentSecurityToken}
+WebSocket Status: ${webSocketStatus.connectionState}
+Codespaces Available: ${codespaceStatus.count}
+Active Codespaces: ${codespaceStatus.activeCodespaces.map(cs => cs.name).join(', ') || 'None'}
+
+This evaluation provides the security token needed for code execution and current system status.
+        `.trim();
+
+        const approvalMessage = {
+          id: `evaluate-approval-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          title: "Security Evaluation Request",
+          body: `System evaluation requested:\n\n${evaluationSummary}\n\nApprove to provide security token and system status?`,
+          timestamp: Date.now(),
+          priority: "normal" as const,
+          sender: "MCP Security System",
+          status: 'pending' as const,
+          requiresResponse: true
+        };
+
+        console.error(`🔔 Sending evaluation approval request`);
+        
+        const approvalResponse = await wsManager.sendAndWaitForApproval(
+          approvalMessage, 
+          300000 // 5 minutes timeout
+        );
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                ...evaluationData,
+                approvalRequest: approvalMessage,
+                approvalResponse: approvalResponse,
+                approvalNote: "✅ Security evaluation approved and completed"
+              }, null, 2),
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                success: false,
+                error: error instanceof Error ? error.message : "Unknown error occurred",
+                message: "Security evaluation approval failed or timed out"
+              }, null, 2)
+            }
+          ]
+        };
+      }
+    } else {
+      // If no WebSocket connection, return evaluation data with warning
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              ...evaluationData,
+              warning: "⚠️ WebSocket not connected - evaluation returned without approval workflow"
+            }, null, 2),
+          },
+        ],
+      };
+    }
   }
 );
 

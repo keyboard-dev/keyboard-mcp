@@ -410,7 +410,7 @@ export const executeCodeOnWorkstationTunnel = async ({
 
 // Fetch environment variables and resources from workstation tunnel
 export const fetchWorkstationTunnelResources = async ({
-  port = 8080,
+  port = 3000,
 }: {
   port?: number;
 } = {}): Promise<any | Error> => {
