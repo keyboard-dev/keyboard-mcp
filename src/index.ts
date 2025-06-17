@@ -120,34 +120,136 @@ server.tool(
 // Add message sending tool
 server.tool(
   "send-websocket-message",
-  "Send a message through the WebSocket connection",
+  "Send a message through the WebSocket connection and wait for response",
   {
     message: z.string().describe("Message content to send"),
     type: z.string().default("message").describe("Message type"),
     channel: z.string().optional().describe("Optional channel name"),
     title: z.string().describe("Optional title"),
+    wait_for_response: z.boolean().default(false).describe("Whether to wait for a response"),
+    timeout: z.number().optional().describe("Timeout in milliseconds for waiting for response"),
   },
-  async ({ message, type, channel, title }) => {
+  async ({ message, type, channel, title, wait_for_response, timeout }) => {
     try {
       if (!wsManager) {
         throw new Error("WebSocket not connected. Please use connect-websocket tool first.");
       }
 
-      const success = wsManager.send(message, title);
+      if (wait_for_response) {
+        const messageObject = {
+          id: Date.now().toString(),
+          title: title || 'Message with Response',
+          body: message,
+          timestamp: Date.now(),
+          priority: 'normal',
+          sender: 'MCP Client',
+          requiresResponse: true
+        };
+        
+        const response = await wsManager.sendAndWaitForApproval(messageObject, timeout);
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                success: true,
+                status: wsManager.getConnectionState(),
+                message: "Message sent and response received",
+                response,
+                details: {
+                  messageType: type,
+                  channel,
+                  timestamp: new Date().toISOString()
+                }
+              }, null, 2)
+            }
+          ]
+        };
+      } else {
+        const success = wsManager.send(message, title);
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                success,
+                status: wsManager.getConnectionState(),
+                message: success ? "Message sent successfully" : "Message queued",
+                details: {
+                  messageType: type,
+                  channel,
+                  timestamp: new Date().toISOString()
+                }
+              }, null, 2)
+            }
+          ]
+        };
+      }
+    } catch (error) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              error: error instanceof Error ? error.message : "Unknown error occurred"
+            }, null, 2)
+          }
+        ]
+      };
+    }
+  }
+);
+
+// Add approval request tool
+server.tool(
+  "send-approval-request",
+  "Send an approval request through the WebSocket connection and wait for user approval",
+  {
+    title: z.string().describe("Title of the approval request"),
+    body: z.string().describe("Detailed description of what needs approval"),
+    priority: z.enum(["low", "normal", "high", "urgent"]).default("normal").describe("Priority level of the approval"),
+    sender: z.string().default("MCP Server").describe("Who is requesting the approval"),
+    timeout: z.number().default(300000).describe("Timeout in milliseconds for waiting for approval (default: 5 minutes)"),
+  },
+  async ({ title, body, priority, sender, timeout }) => {
+    try {
+      if (!wsManager) {
+        throw new Error("WebSocket not connected. Please use connect-websocket tool first.");
+      }
+
+      const approvalMessage = {
+        id: `approval-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        title,
+        body,
+        timestamp: Date.now(),
+        priority,
+        sender,
+        status: 'pending',
+        requiresResponse: true
+      };
+
+      console.error(`🔔 Sending approval request: ${title}`);
+      
+      
+      const response = await wsManager.sendAndWaitForApproval(
+        approvalMessage, 
+        timeout
+      );
+
 
       return {
         content: [
           {
             type: "text",
             text: JSON.stringify({
-              success,
+              success: true,
               status: wsManager.getConnectionState(),
-              message: success ? "Message sent successfully" : "Message queued",
-              details: {
-                messageType: type,
-                channel,
-                timestamp: new Date().toISOString()
-              }
+              message: "Approval request sent and response received",
+              approvalRequest: approvalMessage,
+              approvalResponse: response,
+              timestamp: new Date().toISOString()
             }, null, 2)
           }
         ]
@@ -160,7 +262,8 @@ server.tool(
             type: "text",
             text: JSON.stringify({
               success: false,
-              error: error instanceof Error ? error.message : "Unknown error occurred"
+              error: error instanceof Error ? error.message : "Unknown error occurred",
+              message: "Approval request failed or timed out"
             }, null, 2)
           }
         ]
@@ -335,6 +438,10 @@ const executeCodeOnCodespace = async ({
   token,
 }: ExecuteCodeParams): Promise<any | Error> => {
   try {
+    if (!wsManager) {
+      throw new Error("WebSocket not connected. Please use connect-websocket tool first.");
+    }
+
     const executeUrl = `${codespaceUrl}/execute`;
     
     const requestBody = JSON.stringify({
@@ -358,10 +465,29 @@ const executeCodeOnCodespace = async ({
     }
 
     const responseData = await response.json();
+
+    let responseBody = responseData || {"success": false, "error": "No response from codespace"}
+
+    const approvalMessage = {
+      id: `approval-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      title: "code response approval",
+      body: `Here is the response from the codespace: ${JSON.stringify(responseBody)}`,
+      timestamp: Date.now(),
+      priority: "normal",
+      sender: "MCP Client",
+      status: 'pending',
+      requiresResponse: true
+    };
+
+    let webSocketResponse = await wsManager.sendAndWaitForApproval(
+      approvalMessage, 
+      300000
+    );
+    
     
     return {
       success: true,
-      data: responseData,
+      webSocketResponse: webSocketResponse,
       status: response.status,
     };
   } catch (e) {
@@ -639,6 +765,8 @@ server.tool(
           ],
         };
       }
+
+      
 
       return {
         content: [
