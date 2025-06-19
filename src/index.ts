@@ -4,7 +4,7 @@ import { z } from "zod";
 import { Octokit } from "@octokit/rest";
 import 'dotenv/config'
 import { analyzeCodeWithGemma, initializeLocalLLM } from "./local-llm-service.js";
-import { 
+import {
   listGoogleWorkstations,
   startGoogleWorkstation,
   stopGoogleWorkstation,
@@ -145,7 +145,7 @@ server.tool(
           sender: 'MCP Client',
           requiresResponse: true
         };
-        
+
         const response = await wsManager.sendAndWaitForApproval(messageObject, timeout);
         return {
           content: [
@@ -231,10 +231,10 @@ server.tool(
       };
 
       console.error(`🔔 Sending approval request: ${title}`);
-      
-      
+
+
       const response = await wsManager.sendAndWaitForApproval(
-        approvalMessage, 
+        approvalMessage,
         timeout
       );
 
@@ -295,7 +295,7 @@ interface ExecuteCodeParams {
 const createInteractiveDocsCodespace = async ({
   token,
   owner = "docsdeveloperdemo",
-  repo = "codespace-executor", 
+  repo = "codespace-executor",
   branch = "main"
 }: CreateCodespaceParams): Promise<any | Error> => {
   try {
@@ -304,7 +304,7 @@ const createInteractiveDocsCodespace = async ({
       "owner": owner,
       "repo": repo,
       "branch": branch,
-      
+
     }
 
     const { owner: bodyOwner, repo: bodyRepo, branch: bodyBranch = "main" } = body;
@@ -322,7 +322,7 @@ const createInteractiveDocsCodespace = async ({
     // Check if premiumLinux is available, otherwise use standardLinux32gb
     let selectedMachine = "standardLinux32gb"; // default fallback
     const availableMachines = machinesResponse.data.machines;
-    
+
     if (availableMachines.some(machine => machine.name === "premiumLinux")) {
       selectedMachine = "premiumLinux";
     }
@@ -373,10 +373,10 @@ const listActiveCodespacesForRepo = async ({
     });
 
     const response = await octokit.rest.codespaces.listForAuthenticatedUser();
-    
+
     // Filter codespaces by repo name and only include active ones
-    const matchingCodespaces = response.data.codespaces.filter(codespace => 
-      codespace.repository?.name === repo && 
+    const matchingCodespaces = response.data.codespaces.filter(codespace =>
+      codespace.repository?.name === repo &&
       codespace.state === 'Available'
     );
 
@@ -422,7 +422,7 @@ const generateCodespacePortUrl = (codespace: any, port: number = 3000): string =
     }
 
     const codespaceSubdomain = urlParts[0];
-    
+
     // Generate the port URL: https://codespace-subdomain-port.app.github.dev
     return `https://${codespaceSubdomain}-${port}.app.github.dev`;
   } catch (error) {
@@ -443,7 +443,7 @@ const executeCodeOnCodespace = async ({
     }
 
     const executeUrl = `${codespaceUrl}/execute`;
-    
+
     const requestBody = JSON.stringify({
       code: code,
       environmentVariablesNames,
@@ -466,7 +466,7 @@ const executeCodeOnCodespace = async ({
 
     const responseData = await response.json();
 
-    let responseBody = responseData || {"success": false, "error": "No response from codespace"}
+    let responseBody = responseData || { "success": false, "error": "No response from codespace" }
 
     const approvalMessage = {
       id: `approval-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -480,11 +480,11 @@ const executeCodeOnCodespace = async ({
     };
 
     let webSocketResponse = await wsManager.sendAndWaitForApproval(
-      approvalMessage, 
+      approvalMessage,
       300000
     );
-    
-    
+
+
     return {
       success: true,
       webSocketResponse: webSocketResponse,
@@ -500,7 +500,7 @@ const executeCodeOnCodespace = async ({
   }
 };
 
-const fetchKeyNameAndResources = async ({codespaceUrl, githubPatToken}: {codespaceUrl: string, githubPatToken: string}): Promise<any | Error> => {
+const fetchKeyNameAndResources = async ({ codespaceUrl, githubPatToken }: { codespaceUrl: string, githubPatToken: string }): Promise<any | Error> => {
   try {
     const response = await fetch(`${codespaceUrl}/fetch_key_name_and_resources`, {
       method: 'POST',
@@ -517,7 +517,7 @@ const fetchKeyNameAndResources = async ({codespaceUrl, githubPatToken}: {codespa
     }
 
     const responseData = await response.json();
-    
+
     return {
       success: true,
       data: responseData,
@@ -579,9 +579,9 @@ server.tool(
   "create-github-codespace",
   "create a github codespace",
   async () => {
-      const response = await createInteractiveDocsCodespace({
-          token: githubPatToken
-      })
+    const response = await createInteractiveDocsCodespace({
+      token: githubPatToken
+    })
 
     return {
       content: [
@@ -598,11 +598,11 @@ server.tool(
   "create-local-model-evaluator-codespace",
   "Create a GitHub codespace for the keyboard-dev/local-model-evalualtor repository",
   async () => {
-      const response = await createInteractiveDocsCodespace({
-          token: githubPatToken,
-          owner: "docsdeveloperdemo",
-          repo: "local-model-evalualtor"
-      })
+    const response = await createInteractiveDocsCodespace({
+      token: githubPatToken,
+      owner: "docsdeveloperdemo",
+      repo: "local-model-evalualtor"
+    })
 
     return {
       content: [
@@ -619,9 +619,9 @@ server.tool(
   "list-active-codespaces",
   "List active GitHub codespaces for the codespace-executor repo",
   async () => {
-      const response = await listActiveCodespacesForRepo({
-          token: githubPatToken
-      });
+    const response = await listActiveCodespacesForRepo({
+      token: githubPatToken
+    });
 
     return {
       content: [
@@ -638,55 +638,72 @@ server.tool(
   "get-codespace-port-urls",
   "Get active codespaces for codespace-executor repo with port 3000 URLs",
   async () => {
-      const response = await listActiveCodespacesForRepo({
-          token: githubPatToken
-      });
+    const response = await listActiveCodespacesForRepo({
+      token: githubPatToken
+    });
 
-      if (!response.success) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(response, null, 2),
-            },
-          ],
-        };
-      }
-
-      const codespacesWithUrls = response.codespaces.map((codespace: any) => ({
-        name: codespace.name,
-        web_url: codespace.web_url,
-        port_3000_url: generateCodespacePortUrl(codespace, 3000),
-        state: codespace.state,
-        created_at: codespace.created_at,
-        last_used_at: codespace.last_used_at
-      }));
-
+    if (!response.success) {
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify({
-              success: true,
-              count: codespacesWithUrls.length,
-              codespaces: codespacesWithUrls
-            }, null, 2),
+            text: JSON.stringify(response, null, 2),
           },
         ],
       };
+    }
+
+    const codespacesWithUrls = response.codespaces.map((codespace: any) => ({
+      name: codespace.name,
+      web_url: codespace.web_url,
+      port_3000_url: generateCodespacePortUrl(codespace, 3000),
+      state: codespace.state,
+      created_at: codespace.created_at,
+      last_used_at: codespace.last_used_at
+    }));
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: true,
+            count: codespacesWithUrls.length,
+            codespaces: codespacesWithUrls
+          }, null, 2),
+        },
+      ],
+    };
   },
 );
 
 server.tool(
   "evaluate",
   "Get the current security evaluation token, WebSocket connection status, GitHub Codespace status, accessible third party API resources, and instructions for writing safe code. ALWAYS call this before executing any code.",
-  async () => {
+  {
+    code: z.string().describe("The whole JavaScript/Node.js we are trying to execute in the codespace, that needs to be evaluated for security"),
+    explainationOfCode: z.string().describe("A complete breakdown step by step of what the code to be executed does and what services or resources it will use"),
+  },
+  async ({ code, explainationOfCode }) => {
     // Check WebSocket connection status
     const webSocketStatus = {
       connected: wsManager !== null,
       connectionState: wsManager ? wsManager.getConnectionState() : "disconnected",
       message: wsManager ? "WebSocket manager is available" : "WebSocket not connected. Use 'connect-websocket' tool to establish connection."
     };
+
+    // Throw MCP error if WebSocket is not connected
+    if (!wsManager) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "❌ WEBSOCKET ERROR: WebSocket not connected. Please use the 'connect-websocket' tool to establish connection before running security evaluation."
+          }
+        ]
+      };
+    }
 
     // Check GitHub Codespace status
     let codespaceStatus = {
@@ -705,7 +722,7 @@ server.tool(
         codespaceStatus = {
           available: codespacesResponse.codespaces.length > 0,
           count: codespacesResponse.codespaces.length,
-          message: codespacesResponse.codespaces.length > 0 
+          message: codespacesResponse.codespaces.length > 0
             ? `${codespacesResponse.codespaces.length} active codespace(s) available for code execution`
             : "No active codespaces found. Use 'create-github-codespace' tool to create one.  After that make sure to use the fetch-environment-and-resources tool to get the environment variables and resources available to you before you write and execute the code",
           activeCodespaces: codespacesResponse.codespaces.map((cs: any) => ({
@@ -722,6 +739,24 @@ server.tool(
     } catch (error) {
       codespaceStatus.message = `Error checking codespaces: ${error instanceof Error ? error.message : 'Unknown error'}`;
     }
+
+    // Throw MCP error if no active codespaces are available
+    if (!codespaceStatus.available) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "❌ CODESPACE ERROR: No active GitHub codespaces found. Please use the 'create-github-codespace' tool to create one before running security evaluation."
+          }
+        ]
+      };
+    }
+
+    let activeCodespace = codespaceStatus.activeCodespaces[0];
+    let codespacesPortUrl = generateCodespacePortUrl(activeCodespace, 3000);
+
+    const response = await fetchKeyNameAndResources({ codespaceUrl: codespacesPortUrl, githubPatToken });
 
     // Prepare evaluation data
     const evaluationData = {
@@ -740,7 +775,8 @@ server.tool(
           "4. Limit file system access to necessary directories only",
           "5. Avoid running shell commands unless absolutely necessary",
           "6. Always handle errors gracefully and provide meaningful error messages",
-          "7. Use secure coding practices and follow the principle of least privilege"
+          "7. Use secure coding practices and follow the principle of least privilege",
+          "8. Very important is try to write one-off scripts, do not try to create app or servers unless explicitly asked to do so"
         ],
         "securityChecks": [
           "Check for malicious patterns (rm -rf, eval, exec, etc.)",
@@ -761,9 +797,14 @@ server.tool(
 Security Token: ${currentSecurityToken}
 WebSocket Status: ${webSocketStatus.connectionState}
 Codespaces Available: ${codespaceStatus.count}
-Active Codespaces: ${codespaceStatus.activeCodespaces.map(cs => cs.name).join(', ') || 'None'}
 
 This evaluation provides the security token needed for code execution and current system status.
+
+Code to be executed: ${code}
+
+Explaination of code: ${explainationOfCode}
+
+
         `.trim();
 
         const approvalMessage = {
@@ -774,15 +815,19 @@ This evaluation provides the security token needed for code execution and curren
           priority: "normal" as const,
           sender: "MCP Security System",
           status: 'pending' as const,
+          code: code,
+          explaination: explainationOfCode,
+          codeEval: true,
           requiresResponse: true
         };
 
         console.error(`🔔 Sending evaluation approval request`);
-        
+
         const approvalResponse = await wsManager.sendAndWaitForApproval(
-          approvalMessage, 
+          approvalMessage,
           300000 // 5 minutes timeout
         );
+        
 
         return {
           content: [
@@ -790,6 +835,7 @@ This evaluation provides the security token needed for code execution and curren
               type: "text",
               text: JSON.stringify({
                 ...evaluationData,
+                codespaceResources: response,
                 approvalRequest: approvalMessage,
                 approvalResponse: approvalResponse,
                 approvalNote: "✅ Security evaluation approved and completed"
@@ -841,57 +887,57 @@ server.tool(
     relevantDocs: z.array(z.string()).describe("The relevant docs to inform the code to execute"),
   },
   async ({ codespace_url, code, security_token, environmentVariablesNames, installPackages, relevantDocs }) => {
-      // Validate security token
-      if (security_token !== currentSecurityToken) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: `❌ SECURITY ERROR: Invalid or expired security token. Please call the 'evaluate' tool first to get the current token.`,
-            },
-          ],
-        };
-      }
-
-      // Generate new security token for next execution
-      currentSecurityToken = generateSecurityToken();
-      console.error(`🔒 New security token generated: ${currentSecurityToken}`);
-
-      const response = await executeCodeOnCodespace({
-          codespaceUrl: codespace_url,
-          code: code,
-          environmentVariablesNames,
-          docResources: relevantDocs,
-          token: githubPatToken
-      });
-
-      // Check if there was an error and use MCP error handling
-      if (!response.success) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: `Error executing code on codespace: ${response.error?.message || 'Unknown error'}`,
-            },
-          ],
-        };
-      }
-
-      
-
+    // Validate security token
+    if (security_token !== currentSecurityToken) {
       return {
+        isError: true,
         content: [
           {
             type: "text",
-            text: JSON.stringify({
-              ...response,
-              securityNote: "✅ Code executed successfully. Security token has been refreshed. Call 'evaluate' again before next execution."
-            }, null, 2),
+            text: `❌ SECURITY ERROR: Invalid or expired security token. Please call the 'evaluate' tool first to get the current token.`,
           },
         ],
       };
+    }
+
+    // Generate new security token for next execution
+    currentSecurityToken = generateSecurityToken();
+    console.error(`🔒 New security token generated: ${currentSecurityToken}`);
+
+    const response = await executeCodeOnCodespace({
+      codespaceUrl: codespace_url,
+      code: code,
+      environmentVariablesNames,
+      docResources: relevantDocs,
+      token: githubPatToken
+    });
+
+    // Check if there was an error and use MCP error handling
+    if (!response.success) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: `Error executing code on codespace: ${response.error?.message || 'Unknown error'}`,
+          },
+        ],
+      };
+    }
+
+
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            ...response,
+            securityNote: "✅ Code executed successfully. Security token has been refreshed. Call 'evaluate' again before next execution."
+          }, null, 2),
+        },
+      ],
+    };
   },
 );
 
@@ -906,105 +952,105 @@ server.tool(
     relevantDocs: z.array(z.string()).describe("The relevant docs to inform the code to execute")
   },
   async ({ code, security_token, environmentVariablesNames, installPackages, relevantDocs }) => {
-      // Validate security token
-      if (security_token !== currentSecurityToken) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: `❌ SECURITY ERROR: Invalid or expired security token. Please call the 'evaluate' tool first to get the current token.`,
-            },
-          ],
-        };
-      }
-
-      // Generate new security token for next execution
-      currentSecurityToken = generateSecurityToken();
-      console.error(`🔒 New security token generated: ${currentSecurityToken}`);
-
-      // First, get active codespaces
-      const codespacesResponse = await listActiveCodespacesForRepo({
-          token: githubPatToken
-      });
-
-      if (!codespacesResponse.success) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: `Failed to fetch active codespaces: ${codespacesResponse.error?.message || 'Unknown error'}`,
-            },
-          ],
-        };
-      }
-
-      if (codespacesResponse.codespaces.length === 0) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: "No active codespaces found for codespace-executor repo",
-            },
-          ],
-        };
-      }
-
-      // Use the first active codespace
-      const firstCodespace = codespacesResponse.codespaces[0];
-      const port3000Url = generateCodespacePortUrl(firstCodespace, 3000);
-
-      if (port3000Url.startsWith('Error')) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: `Error generating codespace URL: ${port3000Url}. Try using the fetch-environment-and-resources tool to get the environment variables and resources available to you before you write and execute the code`,
-            },
-          ],
-        };
-      }
-
-      // Execute the code
-      const executeResponse = await executeCodeOnCodespace({
-          codespaceUrl: port3000Url,
-          code: code,
-          token: githubPatToken,
-          environmentVariablesNames,
-          docResources: relevantDocs
-      });
-
-      // Check if code execution failed
-      if (!executeResponse.success) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: `Error executing code on codespace ${firstCodespace.name}: ${executeResponse.error?.message || 'Unknown error'}`,
-            },
-          ],
-        };
-      }
-
+    // Validate security token
+    if (security_token !== currentSecurityToken) {
       return {
+        isError: true,
         content: [
           {
             type: "text",
-            text: JSON.stringify({
-              codespace_used: {
-                name: firstCodespace.name,
-                url: port3000Url
-              },
-              execution_result: executeResponse,
-              securityNote: "✅ Code executed successfully. Security token has been refreshed. Call 'evaluate' again before next execution."
-            }, null, 2),
+            text: `❌ SECURITY ERROR: Invalid or expired security token. Please call the 'evaluate' tool first to get the current token.`,
           },
         ],
       };
+    }
+
+    // Generate new security token for next execution
+    currentSecurityToken = generateSecurityToken();
+    console.error(`🔒 New security token generated: ${currentSecurityToken}`);
+
+    // First, get active codespaces
+    const codespacesResponse = await listActiveCodespacesForRepo({
+      token: githubPatToken
+    });
+
+    if (!codespacesResponse.success) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: `Failed to fetch active codespaces: ${codespacesResponse.error?.message || 'Unknown error'}`,
+          },
+        ],
+      };
+    }
+
+    if (codespacesResponse.codespaces.length === 0) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "No active codespaces found for codespace-executor repo",
+          },
+        ],
+      };
+    }
+
+    // Use the first active codespace
+    const firstCodespace = codespacesResponse.codespaces[0];
+    const port3000Url = generateCodespacePortUrl(firstCodespace, 3000);
+
+    if (port3000Url.startsWith('Error')) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: `Error generating codespace URL: ${port3000Url}. Try using the fetch-environment-and-resources tool to get the environment variables and resources available to you before you write and execute the code`,
+          },
+        ],
+      };
+    }
+
+    // Execute the code
+    const executeResponse = await executeCodeOnCodespace({
+      codespaceUrl: port3000Url,
+      code: code,
+      token: githubPatToken,
+      environmentVariablesNames,
+      docResources: relevantDocs
+    });
+
+    // Check if code execution failed
+    if (!executeResponse.success) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: `Error executing code on codespace ${firstCodespace.name}: ${executeResponse.error?.message || 'Unknown error'}`,
+          },
+        ],
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            codespace_used: {
+              name: firstCodespace.name,
+              url: port3000Url
+            },
+            execution_result: executeResponse,
+            securityNote: "✅ Code executed successfully. Security token has been refreshed. Call 'evaluate' again before next execution."
+          }, null, 2),
+        },
+      ],
+    };
   },
 );
 
@@ -1012,81 +1058,81 @@ server.tool(
   "fetch-environment-and-resources",
   "If you need to use any code that requires a specific npm or sdk or an API key, use this to check what is available to you before you write and execute the code",
   async () => {
-      // First, get active codespaces
-      const codespacesResponse = await listActiveCodespacesForRepo({
-          token: githubPatToken
-      });
+    // First, get active codespaces
+    const codespacesResponse = await listActiveCodespacesForRepo({
+      token: githubPatToken
+    });
 
-      if (!codespacesResponse.success) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: `Failed to fetch active codespaces: ${codespacesResponse.error?.message || 'Unknown error'}`,
-            },
-          ],
-        };
-      }
-
-      if (codespacesResponse.codespaces.length === 0) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: "No active codespaces found for codespace-executor repo",
-            },
-          ],
-        };
-      }
-
-      // Use the first active codespace
-      const firstCodespace = codespacesResponse.codespaces[0];
-      const codespacesPortUrl = generateCodespacePortUrl(firstCodespace, 3000);
-
-      if (codespacesPortUrl.startsWith('Error')) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: `Error generating codespace URL: ${codespacesPortUrl}`,
-            },
-          ],
-        };
-      }
-
-      // Fetch key names and resources
-      const response = await fetchKeyNameAndResources({codespaceUrl: codespacesPortUrl, githubPatToken});
-
-      // Check if fetching resources failed
-      if (!response.success) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: `Error fetching environment and resources: ${response.error?.message || 'Unknown error'}`,
-            },
-          ],
-        };
-      }
-
+    if (!codespacesResponse.success) {
       return {
+        isError: true,
         content: [
           {
             type: "text",
-            text: JSON.stringify({
-              codespace_used: {
-                name: firstCodespace.name,
-                url: codespacesPortUrl
-              },
-              fetch_result: response
-            }, null, 2),
+            text: `Failed to fetch active codespaces: ${codespacesResponse.error?.message || 'Unknown error'}`,
           },
         ],
       };
+    }
+
+    if (codespacesResponse.codespaces.length === 0) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "No active codespaces found for codespace-executor repo",
+          },
+        ],
+      };
+    }
+
+    // Use the first active codespace
+    const firstCodespace = codespacesResponse.codespaces[0];
+    const codespacesPortUrl = generateCodespacePortUrl(firstCodespace, 3000);
+
+    if (codespacesPortUrl.startsWith('Error')) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: `Error generating codespace URL: ${codespacesPortUrl}`,
+          },
+        ],
+      };
+    }
+
+    // Fetch key names and resources
+    const response = await fetchKeyNameAndResources({ codespaceUrl: codespacesPortUrl, githubPatToken });
+
+    // Check if fetching resources failed
+    if (!response.success) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: `Error fetching environment and resources: ${response.error?.message || 'Unknown error'}`,
+          },
+        ],
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            codespace_used: {
+              name: firstCodespace.name,
+              url: codespacesPortUrl
+            },
+            fetch_result: response
+          }, null, 2),
+        },
+      ],
+    };
   },
 );
 
@@ -1097,32 +1143,32 @@ server.tool(
     codespace_name: z.string().describe("The name of the codespace to stop"),
   },
   async ({ codespace_name }) => {
-      const response = await stopCodespace({
-          codespaceName: codespace_name,
-          token: githubPatToken
-      });
+    const response = await stopCodespace({
+      codespaceName: codespace_name,
+      token: githubPatToken
+    });
 
-      // Check if stopping codespace failed
-      if (!response.success) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: `Error stopping codespace ${codespace_name}: ${response.error?.message || 'Unknown error'}`,
-            },
-          ],
-        };
-      }
-
+    // Check if stopping codespace failed
+    if (!response.success) {
       return {
+        isError: true,
         content: [
           {
             type: "text",
-            text: JSON.stringify(response, null, 2),
+            text: `Error stopping codespace ${codespace_name}: ${response.error?.message || 'Unknown error'}`,
           },
         ],
       };
+    }
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(response, null, 2),
+        },
+      ],
+    };
   },
 );
 
@@ -1130,71 +1176,71 @@ server.tool(
   "stop-active-codespace",
   "Find and stop the first active codespace-executor codespace",
   async () => {
-      // First, get active codespaces
-      const codespacesResponse = await listActiveCodespacesForRepo({
-          token: githubPatToken
-      });
+    // First, get active codespaces
+    const codespacesResponse = await listActiveCodespacesForRepo({
+      token: githubPatToken
+    });
 
-      if (!codespacesResponse.success) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: `Failed to fetch active codespaces: ${codespacesResponse.error?.message || 'Unknown error'}`,
-            },
-          ],
-        };
-      }
-
-      if (codespacesResponse.codespaces.length === 0) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: "No active codespaces found for codespace-executor repo",
-            },
-          ],
-        };
-      }
-
-      // Use the first active codespace
-      const firstCodespace = codespacesResponse.codespaces[0];
-
-      // Stop the codespace
-      const stopResponse = await stopCodespace({
-          codespaceName: firstCodespace.name,
-          token: githubPatToken
-      });
-
-      // Check if stopping codespace failed
-      if (!stopResponse.success) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: `Error stopping codespace ${firstCodespace.name}: ${stopResponse.error?.message || 'Unknown error'}`,
-            },
-          ],
-        };
-      }
-
+    if (!codespacesResponse.success) {
       return {
+        isError: true,
         content: [
           {
             type: "text",
-            text: JSON.stringify({
-              codespace_stopped: {
-                name: firstCodespace.name,
-                web_url: firstCodespace.web_url
-              },
-              stop_result: stopResponse
-            }, null, 2),
+            text: `Failed to fetch active codespaces: ${codespacesResponse.error?.message || 'Unknown error'}`,
           },
         ],
       };
+    }
+
+    if (codespacesResponse.codespaces.length === 0) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "No active codespaces found for codespace-executor repo",
+          },
+        ],
+      };
+    }
+
+    // Use the first active codespace
+    const firstCodespace = codespacesResponse.codespaces[0];
+
+    // Stop the codespace
+    const stopResponse = await stopCodespace({
+      codespaceName: firstCodespace.name,
+      token: githubPatToken
+    });
+
+    // Check if stopping codespace failed
+    if (!stopResponse.success) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: `Error stopping codespace ${firstCodespace.name}: ${stopResponse.error?.message || 'Unknown error'}`,
+          },
+        ],
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            codespace_stopped: {
+              name: firstCodespace.name,
+              web_url: firstCodespace.web_url
+            },
+            stop_result: stopResponse
+          }, null, 2),
+        },
+      ],
+    };
   },
 );
 
@@ -1206,11 +1252,11 @@ server.tool(
     context: z.string().optional().describe("Optional context about what the code is supposed to do"),
   },
   async ({ code, context }) => {
-      try {
-        // Run Gemma analysis on the code
-        console.error('🔍 Analyzing code with Gemma...');
+    try {
+      // Run Gemma analysis on the code
+      console.error('🔍 Analyzing code with Gemma...');
       const codespacesResponse = await listActiveCodespacesForRepo({
-          token: githubPatToken
+        token: githubPatToken
       });
 
       if (!codespacesResponse.success) {
@@ -1225,33 +1271,33 @@ server.tool(
         };
       }
       let firstCodespace = null;
-      if(codespacesResponse.codespaces.length > 0) {
+      if (codespacesResponse.codespaces.length > 0) {
         firstCodespace = codespacesResponse.codespaces[0];
       }
       const codespacePortUrl = generateCodespacePortUrl(firstCodespace, 11434);
-        
-        const analysisResult = await analyzeCodeWithGemma(code, codespacePortUrl, githubPatToken);
 
-        // Return the analysis result
-        return {
-          content: [
-            {
-              type: "text",
-              text: `🔍 CODE ANALYSIS RESULT:\n\n${JSON.stringify(analysisResult, null, 2)}`,
-            },
-          ],
-        };
-      } catch (error) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: `❌ Analysis failed: ${error instanceof Error ? error.message : 'Unknown error occurred'}`,
-            },
-          ],
-        };
-      }
+      const analysisResult = await analyzeCodeWithGemma(code, codespacePortUrl, githubPatToken);
+
+      // Return the analysis result
+      return {
+        content: [
+          {
+            type: "text",
+            text: `🔍 CODE ANALYSIS RESULT:\n\n${JSON.stringify(analysisResult, null, 2)}`,
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: `❌ Analysis failed: ${error instanceof Error ? error.message : 'Unknown error occurred'}`,
+          },
+        ],
+      };
+    }
   },
 );
 
@@ -1259,96 +1305,96 @@ server.tool(
   "initialize-llm",
   "Initialize the Local LLM service (Ollama with Gemma model) on the active codespace. This should be run before performing code analysis.",
   async () => {
-      try {
-        console.log('🚀 Initializing Local LLM service...');
-        
-        // First, get active codespaces to determine the codespace URL
-        const codespacesResponse = await listActiveCodespacesForRepo({
-            token: githubPatToken
-        });
+    try {
+      console.log('🚀 Initializing Local LLM service...');
 
-        if (!codespacesResponse.success) {
-          return {
-            isError: true,
-            content: [
-              {
-                type: "text",
-                text: `Failed to fetch active codespaces: ${codespacesResponse.error?.message || 'Unknown error'}`,
-              },
-            ],
-          };
-        }
+      // First, get active codespaces to determine the codespace URL
+      const codespacesResponse = await listActiveCodespacesForRepo({
+        token: githubPatToken
+      });
 
-        if (codespacesResponse.codespaces.length === 0) {
-          return {
-            isError: true,
-            content: [
-              {
-                type: "text",
-                text: "No active codespaces found for codespace-executor repo. Please create a codespace first.",
-              },
-            ],
-          };
-        }
-
-        // Use the first active codespace
-        const firstCodespace = codespacesResponse.codespaces[0];
-        const codespacePortUrl = generateCodespacePortUrl(firstCodespace, 3000);
-
-        if (codespacePortUrl.startsWith('Error')) {
-          return {
-            isError: true,
-            content: [
-              {
-                type: "text",
-                text: `Error generating codespace URL: ${codespacePortUrl}`,
-              },
-            ],
-          };
-        }
-
-        // Initialize the Local LLM service
-        const initResult = await initializeLocalLLM(codespacePortUrl, githubPatToken);
-
-        if (!initResult.success) {
-          return {
-            isError: true,
-            content: [
-              {
-                type: "text",
-                text: `❌ Failed to initialize Local LLM: ${initResult.error || 'Unknown error'}`,
-              },
-            ],
-          };
-        }
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                success: true,
-                message: "✅ Local LLM service initialized successfully",
-                codespace_used: {
-                  name: firstCodespace.name,
-                  url: codespacePortUrl
-                },
-                initialization_result: initResult
-              }, null, 2),
-            },
-          ],
-        };
-      } catch (error) {
+      if (!codespacesResponse.success) {
         return {
           isError: true,
           content: [
             {
               type: "text",
-              text: `❌ LLM initialization failed: ${error instanceof Error ? error.message : 'Unknown error occurred'}`,
+              text: `Failed to fetch active codespaces: ${codespacesResponse.error?.message || 'Unknown error'}`,
             },
           ],
         };
       }
+
+      if (codespacesResponse.codespaces.length === 0) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: "No active codespaces found for codespace-executor repo. Please create a codespace first.",
+            },
+          ],
+        };
+      }
+
+      // Use the first active codespace
+      const firstCodespace = codespacesResponse.codespaces[0];
+      const codespacePortUrl = generateCodespacePortUrl(firstCodespace, 3000);
+
+      if (codespacePortUrl.startsWith('Error')) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: `Error generating codespace URL: ${codespacePortUrl}`,
+            },
+          ],
+        };
+      }
+
+      // Initialize the Local LLM service
+      const initResult = await initializeLocalLLM(codespacePortUrl, githubPatToken);
+
+      if (!initResult.success) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: `❌ Failed to initialize Local LLM: ${initResult.error || 'Unknown error'}`,
+            },
+          ],
+        };
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              message: "✅ Local LLM service initialized successfully",
+              codespace_used: {
+                name: firstCodespace.name,
+                url: codespacePortUrl
+              },
+              initialization_result: initResult
+            }, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: `❌ LLM initialization failed: ${error instanceof Error ? error.message : 'Unknown error occurred'}`,
+          },
+        ],
+      };
+    }
   },
 );
 
