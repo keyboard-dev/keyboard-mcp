@@ -686,6 +686,18 @@ server.tool(
       };
     }
 
+    if (!wsManager) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "❌ WEBSOCKET ERROR: WebSocket not connected. Please use the 'connect-websocket' tool to establish connection before running security evaluation."
+          }
+        ]
+      };
+    }
+
     let code = executionCodeCollection[defaultUserId]?.[execution_token]?.code;
 
     // Generate new execution token for next execution
@@ -746,7 +758,8 @@ server.tool(
     const executeResponse = await executeCodeOnCodespace({
       codespaceUrl: port3000Url,
       code: code,
-      token: githubPatToken
+      token: githubPatToken,
+      wsManager: wsManager
     });
 
     // Check if code execution failed
