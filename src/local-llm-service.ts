@@ -38,8 +38,6 @@ export const initializeLocalLLM = async (codespaceBaseUrl?: string, githubPatTok
       ? `${codespaceBaseUrl}/local-llm/initialize`
       : 'http://localhost:3000/local-llm/initialize';
 
-    console.log(`🚀 Initializing Local LLM at: ${initUrl}`);
-
     const response = await fetch(initUrl, {
       method: 'POST',
       headers: {
@@ -77,8 +75,6 @@ export const getLLMStatus = async (codespaceBaseUrl?: string, githubPatToken?: s
     const statusUrl = codespaceBaseUrl 
       ? `${codespaceBaseUrl}/local-llm/status`
       : 'http://localhost:3000/local-llm/status';
-
-    console.log(`📊 Checking LLM status at: ${statusUrl}`);
 
     const response = await fetch(statusUrl, {
       method: 'GET',

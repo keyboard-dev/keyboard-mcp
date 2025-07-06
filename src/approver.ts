@@ -44,7 +44,6 @@ export class WebSocketManager {
       this.ws = new WebSocket(this.options.url);
       
       this.ws.on('open', () => {
-        console.log('WebSocket connected to', this.options.url);
         this.reconnectAttempts = 0;
         this.flushQueue();
       });
@@ -54,7 +53,6 @@ export class WebSocketManager {
       });
 
       this.ws.on('close', (code: number, reason: Buffer) => {
-        console.log(`WebSocket disconnected: ${code} - ${reason.toString()}`);
         this.ws = null;
         
         // Reject any pending response
@@ -94,8 +92,6 @@ export class WebSocketManager {
     }
 
     this.reconnectAttempts++;
-    console.log(`Scheduling reconnect attempt ${this.reconnectAttempts}/${this.options.maxReconnectAttempts}`);
-    
     this.reconnectTimer = setTimeout(() => {
       this.connect();
     }, this.options.reconnectInterval);
@@ -116,17 +112,24 @@ export class WebSocketManager {
       try {
         let parsedMessage = JSON.parse(message);
 
+        // Handle token response
+        if (parsedMessage?.type === 'auth-token') {
+          this.pendingResponse.resolve(parsedMessage);
+          this.clearPendingResponse();
+          return;
+        }
+
+        // Handle approval responses
         if(parsedMessage?.status === 'approved') {
           this.pendingResponse.resolve(parsedMessage);
         } else if(parsedMessage?.status === 'rejected') {
           let feedback = parsedMessage?.feedback || 'yo you rejected the message'
           this.pendingResponse.resolve(JSON.stringify({error: 'code execution rejected', feedback: feedback}));
         } else {
-          this.pendingResponse.resolve(JSON.stringify({error: 'Invalid approval response'}));
+          this.pendingResponse.resolve(JSON.stringify({error: 'Invalid response'}));
         }
       } catch (error) {
         // If JSON parsing fails, return the raw message
-        console.log('Received plain text response:', message);
         this.pendingResponse.resolve(JSON.stringify({error: 'Failed to parse JSON response'}));
       }
       this.clearPendingResponse();
@@ -136,10 +139,8 @@ export class WebSocketManager {
     // Handle regular messages when not waiting for a response
     try {
       const parsed = JSON.parse(message);
-      console.log('Received JSON message:', parsed);
       this.onJsonMessage(parsed);
     } catch (error) {
-      console.log('Received plain text message:', message);
       this.onTextMessage(message);
     }
   }
@@ -154,17 +155,13 @@ export class WebSocketManager {
   private onJsonMessage(message: any): void {
     // Handle structured JSON messages when not waiting for a response
     if (message.type) {
-      console.log(`Handling ${message.type} message:`, message);
-    }
+      }
   }
 
   private onTextMessage(message: string): void {
     // Handle plain text messages when not waiting for a response
-    console.log(`Handling text message: ${message}`);
-    
     if (message.includes('WebSocket') || message.includes('connected') || message.includes('established')) {
-      console.log('Connection confirmation received');
-    }
+      }
   }
 
   public send(message: string, title: string): boolean {
@@ -188,7 +185,6 @@ export class WebSocketManager {
         return false;
       }
     } else {
-      console.log('WebSocket not connected, queuing message');
       this.messageQueue.push(messageStr);
       return false;
     }
@@ -218,6 +214,41 @@ export class WebSocketManager {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
         try {
           this.ws.send(JSON.stringify(messageObject));
+        } catch (error) {
+          this.clearPendingResponse();
+          reject(error);
+        }
+      } else {
+        this.clearPendingResponse();
+        reject(new Error('WebSocket not connected'));
+      }
+    });
+  }
+
+  public async sendAndWaitForTokenResponse(tokenRequest: any, timeout: number = 10000): Promise<any> {
+    // Check if we're already waiting for a response
+    if (this.pendingResponse) {
+      throw new Error('Already waiting for a response');
+    }
+
+    return new Promise((resolve, reject) => {
+      // Set up timeout
+      const timeoutId = setTimeout(() => {
+        this.clearPendingResponse();
+        reject(new Error('Token request timeout'));
+      }, timeout);
+
+      // Store the pending response
+      this.pendingResponse = {
+        resolve,
+        reject,
+        timeout: timeoutId
+      };
+
+      // Send the token request
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        try {
+          this.ws.send(JSON.stringify(tokenRequest));
         } catch (error) {
           this.clearPendingResponse();
           reject(error);

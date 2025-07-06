@@ -97,7 +97,7 @@ await waitForInstanceRunning(instance.instanceId);
 // 2. Use for basic execution immediately
 const result1 = await executeCodeOnEC2Enhanced({
   instanceId: instance.instanceId,
-  code: 'console.log("Hello from AWS!");',
+  code: '',
   accessToken: awsToken
 });
 
@@ -107,7 +107,7 @@ await setupCodespaceExecutorOnInstance(instance.instanceId, awsToken, githubToke
 // 4. Now use with full codespace environment
 const result2 = await executeCodeOnEC2Enhanced({
   instanceId: instance.instanceId,
-  code: 'console.log("Hello from codespace-executor environment!");',
+  code: '',
   accessToken: awsToken
   // Automatically uses codespace-executor directory
 });
