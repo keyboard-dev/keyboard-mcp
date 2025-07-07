@@ -25,6 +25,7 @@ import {
 import { createInteractiveDocsCodespace, listActiveCodespacesForRepo, listAllCodespacesForRepo, generateCodespacePortUrl, fetchKeyNameAndResources, deleteCodespace, stopCodespace, executeCodeOnCodespace } from './codespaces.js';
 
 let githubPatToken = process.env.GITHUB_PAT_TOKEN || "";
+let encryptMessages = process.env.ENCRYPT_MESSAGES || true
 
 
 // Create WebSocketManager instance

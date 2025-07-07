@@ -1,7 +1,31 @@
 import { WebSocketManager, WebSocketMessage } from './approver.js';
 import { Octokit } from "@octokit/rest";
+import 'dotenv/config'
+let encryptMessages = process.env.ENCRYPT_MESSAGES || true
+let customAPIPort = process.env.CUSTOM_API_PORT || 8081
+import axios from 'axios'
 
+const encryptMessage = async (code: string, token: string) => {
+  const response = await axios.post(`http://127.0.0.1:${customAPIPort}/api/encrypt`, { code }, {
+    headers: {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json'
+    },
+  });
+  console.warn("response", response)
+  return response.data.encryptedCode;
+}
 
+const decryptMessage = async (code: string, token: string) => {
+  const response = await axios.post(`http://127.0.0.1:${customAPIPort}/api/decrypt`, { code }, {
+    headers: {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json'
+    },
+  });
+  console.warn("response", response)
+  return response.data.decryptedCode;
+}
 
 interface CreateCodespaceParams {
     token: string;
@@ -412,10 +436,23 @@ interface CreateCodespaceParams {
     if(aiEvalSettings) wsManager = null
   
       const executeUrl = `${codespaceUrl}/execute`;
+      let userToken;
+      if(encryptMessages) {
+        let tokens = await wsManager?.sendAndWaitForTokenResponse({
+          "type": "request-token",
+          "requestId": "optional-unique-id"
+        }, 3000)
+  
+        userToken = tokens.token;
+        const encryptedCode = await encryptMessage(code, userToken);
+        console.warn("encryptedCode", encryptedCode)
+        code = encryptedCode;
+      }
   
       const requestBody = JSON.stringify({
         code: code,
-        ai_eval: aiEvalSettings
+        ai_eval: aiEvalSettings,
+        encrypt_messages: encryptMessages
       });
 
       const response = await fetch(executeUrl, {
@@ -434,8 +471,8 @@ interface CreateCodespaceParams {
   
       const responseData: any = await response.json();
       let responseBody = responseData || { "success": false, "error": "No response from codespace" }
-  
-      const approvalMessage = {
+
+      let approvalMessage = {
         id: `approval-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         title: "code response approval",
         body: `Here is the response from the codespace: ${JSON.stringify(responseBody)}`,
@@ -446,6 +483,20 @@ interface CreateCodespaceParams {
         type: "notification_message",
         requiresResponse: true
       };
+
+      if(encryptMessages) {
+        let decryptedResponseBody;
+        try {
+          console.warn("responseBody", responseBody)
+          decryptedResponseBody = await decryptMessage(responseBody.data, userToken)
+          console.warn("decryptedResponseBody", decryptedResponseBody)
+        } catch (e) {
+          //console.warn("error parsing responseBody", e)
+        }
+        if(decryptedResponseBody) {
+          approvalMessage.body = `Here is the response from the codespace: ${decryptedResponseBody}`
+        }
+      } 
   
       let responseToSend = null;
       if(!aiEvalSettings && wsManager) {
@@ -488,6 +539,7 @@ interface CreateCodespaceParams {
           throw new Error("AI analysis was not provided in the response.");
         }
       }
+
  
       console.warn("webSocketResponse")
   
