@@ -15,9 +15,7 @@ async function getAccessToken() {
 
 async function callWorkstationAPI() {
   const token = await getAccessToken();
-  console.log(token);
-
-//   const response = await axios.post(
+  //   const response = await axios.post(
 //     `${process.env.WORKSTATION_HOST}/api/run`,
 //     { input: 'Hello from backend!' },
 //     {
@@ -28,7 +26,6 @@ async function callWorkstationAPI() {
 //     }
 //   );
 
-//   console.log('Workstation response:', response.data);
-}
+//   }
 
 callWorkstationAPI().catch(console.error);

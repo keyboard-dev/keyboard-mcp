@@ -17,20 +17,17 @@
     "build"
   ],
   "dependencies": {
-    "@google-cloud/workstations": "^2.1.0",
-    "@google-cloud/compute": "^4.7.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "@octokit/rest": "^20.1.1",
+    "@types/ws": "^8.18.1",
+    "axios": "^1.10.0",
     "dotenv": "^16.5.0",
-    "zod": "^3.25.42",
-    "@aws-sdk/client-ec2": "^3.714.0",
-    "@aws-sdk/client-codecommit": "^3.714.0",
-    "@aws-sdk/client-iam": "^3.714.0",
-    "@aws-sdk/client-sts": "^3.714.0"
+    "ws": "^8.18.3",
+    "zod": "^3.25.42"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
-    "typescript": "^5.0.0",
-    "ts-node": "^10.9.2"
+    "ts-node": "^10.9.2",
+    "typescript": "^5.0.0"
   }
 }

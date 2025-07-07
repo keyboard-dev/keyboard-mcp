@@ -4,49 +4,80 @@ import { z } from "zod";
 import { Octokit } from "@octokit/rest";
 import 'dotenv/config'
 import { analyzeCodeWithGemma, initializeLocalLLM } from "./local-llm-service.js";
-import {
-  listGoogleWorkstations,
-  startGoogleWorkstation,
-  stopGoogleWorkstation,
-  getGoogleWorkstation,
-  getGoogleWorkstationsConsoleUrl,
-  startWorkstationTcpTunnel,
-  executeCodeOnWorkstationTunnel,
-  fetchWorkstationTunnelResources,
-  listGoogleWorkstationClusters,
-  listGoogleWorkstationConfigs,
-  getWorkstationResources,
-  createGoogleWorkstation,
-  createGoogleWorkstationCluster,
-  createGoogleWorkstationConfig,
-  GOOGLE_CLOUD_PROJECT_ID,
-} from "./google.js";
 import { WebSocketManager, WebSocketMessage } from './approver.js';
+import { 
+  saveScriptTemplate, 
+  getScriptTemplate, 
+  listScriptTemplates, 
+  updateScriptTemplate, 
+  deleteScriptTemplate, 
+  searchScriptTemplates, 
+  interpolateScript,
+  SaveScriptSchema,
+  GetScriptSchema,
+  UpdateScriptSchema,
+  DeleteScriptSchema,
+  ListScriptsSchema,
+  SearchScriptsSchema,
+  InterpolateScriptSchema
+} from './kb_shortcuts.js';
+
+import { createInteractiveDocsCodespace, listActiveCodespacesForRepo, listAllCodespacesForRepo, generateCodespacePortUrl, fetchKeyNameAndResources, deleteCodespace, stopCodespace, executeCodeOnCodespace } from './codespaces.js';
 
 let githubPatToken = process.env.GITHUB_PAT_TOKEN || "";
-const googleCloudProjectId = GOOGLE_CLOUD_PROJECT_ID;
+let encryptMessages = process.env.ENCRYPT_MESSAGES || true
+
 
 // Create WebSocketManager instance
 let wsManager: WebSocketManager | null = null;
 
 // Security evaluation mechanism
-let currentExecutionToken: string = "";
 let executionCodeCollection: any = {};
 
 // Function to generate a random execution token
-function generateExecutionToken(): string {
+function generateExecutionToken(userId: string): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   let result = '';
   for (let i = 0; i < 16; i++) {
     result += chars.charAt(Math.floor(Math.random() * chars.length));
   }
+  
+  // Initialize user's collection if it doesn't exist, but preserve existing data
+  if (!executionCodeCollection[userId]) {
+    executionCodeCollection[userId] = {};
+  }
+  
+  // Update execution token without resetting planning data
+  executionCodeCollection[userId].executionToken = result;
+  executionCodeCollection[userId][result] = {};
+  
   return result;
 }
 
-// Initialize execution token when server starts
-currentExecutionToken = generateExecutionToken();
-
-console.error(`🔒 Execution token initialized: ${currentExecutionToken}`);
+function generatePlanningToken(userId: string): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let result = 'plan_' + '';
+  for (let i = 0; i < 16; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  
+  // Initialize user's planning collection if it doesn't exist
+  if (!executionCodeCollection[userId]) {
+    executionCodeCollection[userId] = {};
+  }
+  
+  // Store planning token for single use only
+  executionCodeCollection[userId].planningToken = result;
+  executionCodeCollection[userId][result] = {
+    status: 'planned',
+    createdAt: new Date().toISOString(),
+    plan: null,
+    code: null,
+    used: false // Track if token has been used
+  };
+  
+  return result;
+}
 
 // Create server instance
 const server = new McpServer({
@@ -57,6 +88,8 @@ const server = new McpServer({
     tools: {},
   },
 });
+
+
 
 // Add WebSocket connection tool
 server.tool(
@@ -274,404 +307,6 @@ server.tool(
   }
 );
 
-interface CreateCodespaceParams {
-  token: string;
-  owner?: string;
-  repo?: string;
-  branch?: string;
-}
-
-interface ListCodespacesParams {
-  token: string;
-  repo?: string;
-}
-
-interface ExecuteCodeParams {
-  codespaceUrl: string;
-  code: string;
-  token: string;
-}
-
-const createInteractiveDocsCodespace = async ({
-  token,
-  owner = "docsdeveloperdemo",
-  repo = "codespace-executor",
-  branch = "main"
-}: CreateCodespaceParams): Promise<any | Error> => {
-  try {
-
-    const body = {
-      "owner": owner,
-      "repo": repo,
-      "branch": branch,
-
-    }
-
-    const { owner: bodyOwner, repo: bodyRepo, branch: bodyBranch = "main" } = body;
-
-    const octokit = new Octokit({
-      auth: token,
-    });
-
-    // First, get available machine types for the repository
-    const machinesResponse = await octokit.rest.codespaces.repoMachinesForAuthenticatedUser({
-      owner: bodyOwner,
-      repo: bodyRepo,
-    });
-
-    // Check if premiumLinux is available, otherwise use standardLinux32gb
-    let selectedMachine = "standardLinux32gb"; // default fallback
-    const availableMachines = machinesResponse.data.machines;
-
-    // if (availableMachines.some(machine => machine.name === "premiumLinux")) {
-    //   selectedMachine = "premiumLinux";
-    // }
-
-    const response = await octokit.rest.codespaces.createWithRepoForAuthenticatedUser({
-      owner: bodyOwner,
-      repo: bodyRepo,
-      ref: bodyBranch,
-      location: "WestUs2",
-      machine: selectedMachine,
-    });
-
-    return {
-      success: true,
-      codespace: response.data,
-      url: response.data.web_url,
-      selectedMachine: selectedMachine,
-      availableMachines: machinesResponse.data,
-    };
-  } catch (e) {
-    if (e && typeof e === 'object' && 'response' in e) {
-      const error = e as { response: { headers: any; status: number }; message: string };
-      return {
-        success: false,
-        error: {
-          message: error.message,
-          status: error.response.status,
-          headers: error.response.headers
-        }
-      };
-    }
-    return {
-      success: false,
-      error: {
-        message: e instanceof Error ? e.message : 'Unknown error occurred'
-      }
-    };
-  }
-};
-
-const listActiveCodespacesForRepo = async ({
-  token,
-  repo = "codespace-executor",
-}: ListCodespacesParams): Promise<any | Error> => {
-  try {
-    const octokit = new Octokit({
-      auth: token,
-    });
-
-    const response = await octokit.rest.codespaces.listForAuthenticatedUser();
-
-    // Filter codespaces by repo name and only include active ones
-    const matchingCodespaces = response.data.codespaces.filter(codespace =>
-      codespace.repository?.name === repo &&
-      codespace.state === 'Available'
-    );
-
-    return {
-      success: true,
-      codespaces: matchingCodespaces,
-      count: matchingCodespaces.length,
-    };
-  } catch (e) {
-    if (e && typeof e === 'object' && 'response' in e) {
-      const error = e as { response: { headers: any; status: number }; message: string };
-      return {
-        success: false,
-        error: {
-          message: error.message,
-          status: error.response.status,
-          headers: error.response.headers
-        }
-      };
-    }
-    return {
-      success: false,
-      error: {
-        message: e instanceof Error ? e.message : 'Unknown error occurred'
-      }
-    };
-  }
-};
-
-const listAllCodespacesForRepo = async ({
-  token,
-  repo = "codespace-executor",
-}: ListCodespacesParams): Promise<any | Error> => {
-  try {
-    const octokit = new Octokit({
-      auth: token,
-    });
-
-    const response = await octokit.rest.codespaces.listForAuthenticatedUser();
-
-    // Filter codespaces by repo name (include all states)
-    const matchingCodespaces = response.data.codespaces.filter(codespace =>
-      codespace.repository?.name === repo
-    );
-
-    // Group by state for better organization
-    const codespacesGroupedByState = matchingCodespaces.reduce((acc: any, codespace: any) => {
-      const state = codespace.state || 'Unknown';
-      if (!acc[state]) {
-        acc[state] = [];
-      }
-      acc[state].push(codespace);
-      return acc;
-    }, {});
-
-    return {
-      success: true,
-      codespaces: matchingCodespaces,
-      count: matchingCodespaces.length,
-      groupedByState: codespacesGroupedByState,
-      statesSummary: Object.keys(codespacesGroupedByState).map(state => ({
-        state,
-        count: codespacesGroupedByState[state].length
-      }))
-    };
-  } catch (e) {
-    if (e && typeof e === 'object' && 'response' in e) {
-      const error = e as { response: { headers: any; status: number }; message: string };
-      return {
-        success: false,
-        error: {
-          message: error.message,
-          status: error.response.status,
-          headers: error.response.headers
-        }
-      };
-    }
-    return {
-      success: false,
-      error: {
-        message: e instanceof Error ? e.message : 'Unknown error occurred'
-      }
-    };
-  }
-};
-
-const generateCodespacePortUrl = (codespace: any, port: number = 3000): string => {
-  try {
-    // Extract the codespace name from the web_url
-    // web_url format: https://username-reponame-randomstring.github.dev
-    const webUrl = codespace.web_url;
-    if (!webUrl) {
-      throw new Error('Codespace web_url not found');
-    }
-
-    // Extract the subdomain part (everything before .github.dev)
-    const urlParts = webUrl.replace('https://', '').split('.github.dev');
-    if (urlParts.length < 2) {
-      throw new Error('Invalid codespace URL format');
-    }
-
-    const codespaceSubdomain = urlParts[0];
-
-    // Generate the port URL: https://codespace-subdomain-port.app.github.dev
-    return `https://${codespaceSubdomain}-${port}.app.github.dev`;
-  } catch (error) {
-    return `Error generating port URL: ${error instanceof Error ? error.message : 'Unknown error'}`;
-  }
-};
-
-const executeCodeOnCodespace = async ({
-  codespaceUrl,
-  code,
-  token,
-}: ExecuteCodeParams): Promise<any | Error> => {
-  try {
-    if (!wsManager) {
-      throw new Error("WebSocket not connected. Please use connect-websocket tool first.");
-    }
-
-    const executeUrl = `${codespaceUrl}/execute`;
-
-    const requestBody = JSON.stringify({
-      code: code
-    });
-
-    const response = await fetch(executeUrl, {
-      method: 'POST',
-      headers: {
-        'Authorization': token,
-        'x-github-token': token,
-        'Content-Type': 'application/json',
-      },
-      body: requestBody,
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status} - ${response.statusText}`);
-    }
-
-    const responseData = await response.json();
-
-    let responseBody = responseData || { "success": false, "error": "No response from codespace" }
-
-    const approvalMessage = {
-      id: `approval-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      title: "code response approval",
-      body: `Here is the response from the codespace: ${JSON.stringify(responseBody)}`,
-      timestamp: Date.now(),
-      priority: "normal",
-      sender: "MCP Client",
-      status: 'pending',
-      requiresResponse: true
-    };
-
-    
-
-    let webSocketResponse = await wsManager.sendAndWaitForApproval(
-      approvalMessage,
-      300000
-    );
-
-    console.warn("webSocketResponse")
-
-    return {
-      success: true,
-      webSocketResponse: webSocketResponse,
-      status: response.status,
-    };
-  } catch (e) {
-    return {
-      success: false,
-      error: {
-        message: e instanceof Error ? e.message : 'Unknown error occurred'
-      }
-    };
-  }
-};
-
-const fetchKeyNameAndResources = async ({ codespaceUrl, githubPatToken }: { codespaceUrl: string, githubPatToken: string }): Promise<any | Error> => {
-  try {
-    const response = await fetch(`${codespaceUrl}/fetch_key_name_and_resources`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': githubPatToken,
-        'x-github-token': githubPatToken,
-      },
-      body: JSON.stringify({}),
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status} - ${response.statusText}`);
-    }
-
-    const responseData = await response.json();
-
-    return {
-      success: true,
-      data: responseData,
-      status: response.status,
-    };
-  } catch (e) {
-    return {
-      success: false,
-      error: {
-        message: e instanceof Error ? e.message : 'Unknown error occurred'
-      }
-    };
-  }
-};
-
-const stopCodespace = async ({
-  codespaceName,
-  token,
-}: {
-  codespaceName: string;
-  token: string;
-}): Promise<any | Error> => {
-  try {
-    const octokit = new Octokit({
-      auth: token,
-    });
-
-    const response = await octokit.rest.codespaces.stopForAuthenticatedUser({
-      codespace_name: codespaceName,
-    });
-
-    return {
-      success: true,
-      codespace: response.data,
-      message: `Codespace ${codespaceName} has been stopped`,
-    };
-  } catch (e) {
-    if (e && typeof e === 'object' && 'response' in e) {
-      const error = e as { response: { headers: any; status: number }; message: string };
-      return {
-        success: false,
-        error: {
-          message: error.message,
-          status: error.response.status,
-          headers: error.response.headers
-        }
-      };
-    }
-    return {
-      success: false,
-      error: {
-        message: e instanceof Error ? e.message : 'Unknown error occurred'
-      }
-    };
-  }
-};
-
-const deleteCodespace = async ({
-  codespaceName,
-  token,
-}: {
-  codespaceName: string;
-  token: string;
-}): Promise<any | Error> => {
-  try {
-    const octokit = new Octokit({
-      auth: token,
-    });
-
-    const response = await octokit.rest.codespaces.deleteForAuthenticatedUser({
-      codespace_name: codespaceName,
-    });
-
-    return {
-      success: true,
-      message: `Codespace ${codespaceName} has been deleted`,
-      status: response.status,
-    };
-  } catch (e) {
-    if (e && typeof e === 'object' && 'response' in e) {
-      const error = e as { response: { headers: any; status: number }; message: string };
-      return {
-        success: false,
-        error: {
-          message: error.message,
-          status: error.response.status,
-          headers: error.response.headers
-        }
-      };
-    }
-    return {
-      success: false,
-      error: {
-        message: e instanceof Error ? e.message : 'Unknown error occurred'
-      }
-    };
-  }
-};
 
 server.tool(
   "create-github-codespace",
@@ -692,26 +327,6 @@ server.tool(
   },
 );
 
-server.tool(
-  "create-local-model-evaluator-codespace",
-  "Create a GitHub codespace for the keyboard-dev/local-model-evalualtor repository",
-  async () => {
-    const response = await createInteractiveDocsCodespace({
-      token: githubPatToken,
-      owner: "docsdeveloperdemo",
-      repo: "local-model-evalualtor"
-    })
-
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(response),
-        },
-      ],
-    };
-  },
-);
 
 server.tool(
   "list-active-codespaces",
@@ -819,14 +434,17 @@ server.tool(
 
 server.tool(
   "evaluate",
-  "Get the current execution token, WebSocket connection status, GitHub Codespace status, accessible third party API resources, and instructions for writing safe code. ALWAYS call this before executing any code.",
+  "Evaluate code for security and generate execution token. Uses a planning token (single use only). This is step 2 in the plan -> evaluate -> execute workflow.",
   {
-    code: z.string().describe("The whole JavaScript/Node.js we are trying to execute in the codespace, that needs to be evaluated for security"),
-    explainationOfCode: z.string().describe("A complete breakdown step by step of what the code to be executed does and what services or resources it will use"),
+    planning_token: z.string().describe("Planning token from the 'plan' tool - REQUIRED to proceed with evaluation"),
+    code: z.string().describe("The whole JavaScript/Node.js code to execute in the codespace"),
+    explanation_of_code: z.string().describe("A complete breakdown step by step of what the code does and what services or resources it will use"),
+    researchWouldBeHelpful: z.boolean().describe("Whether using the web search tool would be helpful to understand the code better"),
+    didResearch: z.boolean().describe("Did research before starting to write the code for the task")
   },
-  async ({ code, explainationOfCode }) => {
+  async ({ planning_token, code, explanation_of_code, researchWouldBeHelpful, didResearch }) => {
     let linesOfCode = code.split("\n").length;
-    if(linesOfCode > 10) {
+    if(linesOfCode > 400) {
       return {
         isError: true,
         content: [
@@ -839,7 +457,10 @@ server.tool(
     }
 
     // Check WebSocket connection status
-    executionCodeCollection = {}
+    const defaultUserId = "keyboard-mcp-user";
+    if (!executionCodeCollection[defaultUserId]) {
+      executionCodeCollection[defaultUserId] = {};
+    }
     const webSocketStatus = {
       connected: wsManager !== null,
       connectionState: wsManager ? wsManager.getConnectionState() : "disconnected",
@@ -912,6 +533,9 @@ server.tool(
 
     const response = await fetchKeyNameAndResources({ codespaceUrl: codespacesPortUrl, githubPatToken });
 
+    // Generate execution token
+    const currentExecutionToken = generateExecutionToken(defaultUserId);
+
     // Prepare evaluation data
     const evaluationData = {
       success: true,
@@ -959,7 +583,7 @@ This evaluation provides the execution token needed for code execution and curre
 
 Code to be executed: ${code}
 
-Explaination of code: ${explainationOfCode}
+Explaination of code: ${explanation_of_code}
 
 
         `.trim();
@@ -973,7 +597,7 @@ Explaination of code: ${explainationOfCode}
           sender: "MCP Security System",
           status: 'pending' as const,
           code: code,
-          explaination: explainationOfCode,
+          explaination: explanation_of_code,
           codeEval: true,
           requiresResponse: true
         };
@@ -986,7 +610,8 @@ Explaination of code: ${explainationOfCode}
         );
 
         if(approvalResponse.status === 'approved') {
-          executionCodeCollection = {currentExecutionToken: {code: code}}
+          executionCodeCollection[defaultUserId][currentExecutionToken] = {code: code}
+          executionCodeCollection[defaultUserId].executionToken = currentExecutionToken
         }
         
 
@@ -1038,93 +663,18 @@ Explaination of code: ${explainationOfCode}
   }
 );
 
-// server.tool(
-//   "execute-code-on-codespace",
-//   "Execute code on a specific codespace using its port 3000 URL",
-//   {
-//     codespace_url: z.string().describe("The codespace port 3000 URL (e.g., https://username-repo-abc123-3000.app.github.dev)"),
-//     execution_token: z.string().describe("Execution token from the 'evaluate' tool - REQUIRED for code execution.  This token will retrieve the code to execute from the prior evaluation step"),
-//     environmentVariablesNames: z.array(z.string()).describe("The names of known environment variables in the codespace we can use in the code"),
-//     installPackages: z.array(z.string()).describe("the list of npm packages already installed in the codespace we can use in the code"),
-//     relevantDocs: z.array(z.string()).describe("The relevant docs to inform the code to execute"),
-//   },
-//   async ({ codespace_url, execution_token, environmentVariablesNames, installPackages, relevantDocs }) => {
-//     // Validate execution token
-//     if (execution_token !== currentExecutionToken) {
-//       return {
-//         isError: true,
-//         content: [
-//           {
-//             type: "text",
-//             text: `❌ EXECUTION ERROR: Invalid or expired execution token. Please call the 'evaluate' tool first to get the current token.`,
-//           },
-//         ],
-//       };
-//     }
-
-//     let code = executionCodeCollection?.currentExecutionToken?.code;
-
-//     // Generate new execution token for next execution
-//     currentExecutionToken = generateExecutionToken();
-//     console.error(`🔒 New execution token generated: ${currentExecutionToken}`);
-
-//     if(!code) {
-//       return {
-//         isError: true,
-//         content: [
-//           {
-//             type: "text",
-//             text: `❌ EXECUTION ERROR: No code to execute. Please call the 'evaluate' tool first to get the current token.`,  
-//           },
-//         ],
-//       };
-//     }
-
-//     const response = await executeCodeOnCodespace({
-//       codespaceUrl: codespace_url,
-//       code: code,
-//       environmentVariablesNames,
-//       docResources: relevantDocs,
-//       token: githubPatToken
-//     });
-
-//     // Check if there was an error and use MCP error handling
-//     if (!response.success) {
-//       return {
-//         isError: true,
-//         content: [
-//           {
-//             type: "text",
-//             text: `Error executing code on codespace: ${response.error?.message || 'Unknown error'}`,
-//           },
-//         ],
-//       };
-//     }
-
-//     executionCodeCollection = {}
-
-//     return {
-//       content: [
-//         {
-//           type: "text",
-//           text: JSON.stringify({
-//             ...response,
-//             securityNote: "✅ Code executed successfully. Security token has been refreshed. Call 'evaluate' again before next execution."
-//           }, null, 2),
-//         },
-//       ],
-//     };
-//   },
-// );
 
 server.tool(
-  "execute-code-on-active-codespace",
+  "execute",
   "Find the first active codespace-executor codespace and execute code on it",
   {
     execution_token: z.string().describe("Execution token from the 'evaluate' tool - REQUIRED for code execution")
   },
   async ({ execution_token }) => {
+    const defaultUserId = "keyboard-mcp-user";
+    
     // Validate execution token
+    let currentExecutionToken = executionCodeCollection[defaultUserId]?.executionToken;
     if (execution_token !== currentExecutionToken) {
       return {
         isError: true,
@@ -1137,10 +687,22 @@ server.tool(
       };
     }
 
-    let code = executionCodeCollection?.currentExecutionToken?.code;
+    if (!wsManager) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "❌ WEBSOCKET ERROR: WebSocket not connected. Please use the 'connect-websocket' tool to establish connection before running security evaluation."
+          }
+        ]
+      };
+    }
+
+    let code = executionCodeCollection[defaultUserId]?.[execution_token]?.code;
 
     // Generate new execution token for next execution
-    currentExecutionToken = generateExecutionToken();
+    currentExecutionToken = generateExecutionToken(defaultUserId);
     console.error(`🔒 New execution token generated: ${currentExecutionToken}`);
 
     // First, get active codespaces
@@ -1188,13 +750,17 @@ server.tool(
       };
     }
 
-    executionCodeCollection = {}
+    // Clean up used execution token
+    if (executionCodeCollection[defaultUserId]) {
+      delete executionCodeCollection[defaultUserId][execution_token];
+    }
     console.warn("makes it before execute code on codespace")
     // Execute the code
     const executeResponse = await executeCodeOnCodespace({
       codespaceUrl: port3000Url,
       code: code,
-      token: githubPatToken
+      token: githubPatToken,
+      wsManager: wsManager
     });
 
     // Check if code execution failed
@@ -1528,12 +1094,158 @@ server.tool(
 
 
 server.tool(
+  "plan",
+  "This should be the first tool you call when you are start tackling a new task. It will create a planning token that can be used ONCE in the evaluate step. Each evaluation requires a new planning token.",
+  {
+    context_or_documentation_helpful: z.boolean().describe("Whether the task is complex/unknown and would benefit from web research for context or documentation"),
+    researched_web_context: z.boolean().describe("Whether web research has already been conducted for this task")
+  },
+  async ({ context_or_documentation_helpful, researched_web_context }) => {
+    const defaultUserId = "keyboard-mcp-user";
+    
+    // Generate planning token
+    const planningToken = generatePlanningToken(defaultUserId);
+
+    const instructions = {
+      "GENERAL_WORKFLOW": [
+        "pre-requisites: have a codespace available to you",
+        "1. Use the plan tool to create a planning token",
+        "2. Use the evaluate tool to evaluate the code (consumes the planning token)",
+        "3. Use the execute tool to execute the code",
+        "4. For each new evaluation, create a new planning token"
+      ],
+      "CRITICAL_TOOL_INSTRUCTIONs":[
+        "When using the evaluate tool you must have a planning token",
+        "When using the execute tool you must have an execution token",
+        "Each planning token can only be used ONCE - create a new one for each evaluation",
+        "Determine the resources available to you for example if the users asks you do something in SaaS app but you lack the credentials to do so, mention that to the user"
+      ], 
+      "codeGuidelines": [
+        "1. Always validate user inputs and sanitize data",
+        "2. Never execute code that could harm the system or expose sensitive data",
+        "3. Use environment variables for sensitive information, never hardcode secrets",
+        "4. Limit file system access to necessary directories only",
+        "5. Avoid running shell commands unless absolutely necessary",
+        "6. Always handle errors gracefully and provide meaningful error messages",
+        "7. Use secure coding practices and follow the principle of least privilege",
+        "8. Very important is try to write one-off scripts, do not try to create app or servers unless explicitly asked to do so",
+        "9. Make sure you never overwrite any of the existing files, if you do create files make sure to create a new folder preface of 'temp' at the start",
+        "10. Make sure there are no syntax errors for example unescaped special characters or string literal issues",
+        "11. If you are using a third party API or libary try to validate what you by searching the web",
+        "12. Do not try to do any git operations",
+      ],
+      "securityChecks": [
+        "Check for malicious patterns (rm -rf, eval, exec, etc.)",
+        "Validate all file paths and prevent directory traversal",
+        "Ensure no sensitive data is logged or exposed",
+        "Verify network requests are to trusted endpoints only"
+      ]
+    }
+    
+    let codespaceStatus = {
+      available: false,
+      count: 0,
+      message: "Failed to check codespace status",
+      activeCodespaces: []
+    }
+    
+    try {
+      const codespacesResponse = await listActiveCodespacesForRepo({
+        token: githubPatToken
+      });
+
+      if (codespacesResponse.success) {
+        codespaceStatus = {
+          available: codespacesResponse.codespaces.length > 0,
+          count: codespacesResponse.codespaces.length,
+          message: codespacesResponse.codespaces.length > 0
+            ? `${codespacesResponse.codespaces.length} active codespace(s) available for code execution`
+            : "No active codespaces found. Use 'create-github-codespace' tool to create one.  After that make sure to use the fetch-environment-and-resources tool to get the environment variables and resources available to you before you write and execute the code",
+          activeCodespaces: codespacesResponse.codespaces.map((cs: any) => ({
+            name: cs.name,
+            state: cs.state,
+            web_url: cs.web_url,
+            created_at: cs.created_at,
+            last_used_at: cs.last_used_at
+          }))
+        };
+      } else {
+        codespaceStatus.message = `Error checking codespaces: ${codespacesResponse.error?.message || 'Unknown error'}`;
+      }
+    } catch (error) {
+      codespaceStatus.message = `Error checking codespaces: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
+
+    // Throw MCP error if no active codespaces are available
+    if (!codespaceStatus.available) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "❌ CODESPACE ERROR: No active GitHub codespaces found. Please use the 'create-github-codespace' tool to create one before running security evaluation."
+          }
+        ]
+      };
+    }
+
+    let activeCodespace = codespaceStatus.activeCodespaces[0];
+    let codespacesPortUrl = generateCodespacePortUrl(activeCodespace, 3000);
+    
+    // Create plan object
+    const resources = await fetchKeyNameAndResources({ codespaceUrl: codespacesPortUrl, githubPatToken });
+    const plan = {
+      researchCompleted: researched_web_context,
+      contextResearchRequired: context_or_documentation_helpful,
+      createdAt: new Date().toISOString(),
+      generalGuidelinesAndInstructionsUsingThisToolSystem: instructions,
+      status: 'planned'
+    };
+    
+    // Store the plan
+    executionCodeCollection[defaultUserId][planningToken].plan = plan;
+
+    if (context_or_documentation_helpful && !researched_web_context) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              instruction: "❌ RESEARCH REQUIRED: Task is complex or unknown and requires web research for context or documentation. Please use the 'search-web' tool first, then create a new plan with researched_web_context=true.",
+              resources: resources,
+              generalGuidelinesAndInstructionsUsingThisToolSystem: instructions
+            }, null, 2)
+          }
+        ]
+      };
+    }
+    
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: true,
+            availableResources: resources,
+            planningToken: planningToken,
+            plan: plan,
+            tokenInfo: {
+              singleUse: true,
+              message: "This planning token can be used ONCE for evaluation. Create a new planning token for each evaluation."
+            }
+          }, null, 2)
+        }
+      ]
+    };
+  }
+);
+
+server.tool(
   "initialize-llm",
   "Initialize the Local LLM service (Ollama with Gemma model) on the active codespace. This should be run before performing code analysis.",
   async () => {
     try {
-      console.log('🚀 Initializing Local LLM service...');
-
       // First, get active codespaces to determine the codespace URL
       const codespacesResponse = await listActiveCodespacesForRepo({
         token: githubPatToken
@@ -1624,360 +1336,491 @@ server.tool(
   },
 );
 
-// Google Cloud Workstation Tools
-// server.tool(
-//   "list-google-workstations",
-//   "List Google Cloud Workstations",
-//   {
-//     project_id: z.string().describe("Google Cloud Project ID"),
-//     location: z.string().describe("Location/region (e.g., us-central1)"),
-//     cluster_id: z.string().describe("Workstation cluster ID"),
-//     config_id: z.string().describe("Workstation configuration ID"),
-//   },
-//   async ({ project_id, location, cluster_id, config_id }) => {
-//     const response = await listGoogleWorkstations({
-//       projectId: project_id,
-//       location,
-//       clusterId: cluster_id,
-//       configId: config_id,
-//     });
+// Script Management Tools
+server.tool(
+  "save-script-template",
+  "Save an encrypted interpolatable script template",
+  SaveScriptSchema,
+  async ({ name, description, schema, script, tags = [] }) => {
+    try {
+      let tokens = await wsManager?.sendAndWaitForTokenResponse({
+        "type": "request-token",
+        "requestId": "optional-unique-id"
+      }, 3000)
 
-//     return {
-//       content: [
-//         {
-//           type: "text",
-//           text: JSON.stringify(response, null, 2),
-//         },
-//       ],
-//     };
-//   }
-// );
+      let token = tokens.token;
+      const result = await saveScriptTemplate({
+        name,
+        description,
+        schema,
+        script,
+        tags
+      }, token);
 
-// server.tool(
-//   "start-google-workstation",
-//   "Start a Google Cloud Workstation",
-//   {
-//     workstation_name: z.string().describe("Full workstation resource name (e.g., projects/PROJECT/locations/LOCATION/workstationClusters/CLUSTER/workstationConfigs/CONFIG/workstations/WORKSTATION)"),
-//   },
-//   async ({ workstation_name }) => {
-//     const response = await startGoogleWorkstation(workstation_name);
+      if (!result.success) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: `❌ Error saving script template: ${result.error}`,
+            },
+          ],
+        };
+      }
 
-//     if (!response.success) {
-//       return {
-//         isError: true,
-//         content: [
-//           {
-//             type: "text",
-//             text: `Error starting Google Workstation: ${response.error?.message || 'Unknown error'}`,
-//           },
-//         ],
-//       };
-//     }
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              id: result.id,
+              message: "Script template saved successfully",
+              name,
+              description,
+              variables: script.match(/\{\{\s*(\w+)\s*\}\}/g) || [],
+              tags
+            }, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: `❌ Error saving script template: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          },
+        ],
+      };
+    }
+  }
+);
 
-//     return {
-//       content: [
-//         {
-//           type: "text",
-//           text: JSON.stringify(response, null, 2),
-//         },
-//       ],
-//     };
-//   }
-// );
+server.tool(
+  "get-script-template",
+  "Retrieve and decrypt a script template by ID",
+  GetScriptSchema,
+  async ({ id }) => {
+    try {
+      const defaultUserId = "keyboard-mcp-user";
+      let tokens = await wsManager?.sendAndWaitForTokenResponse({
+        "type": "request-token",
+        "requestId": "optional-unique-id"
+      }, 3000)
 
-// server.tool(
-//   "stop-google-workstation",
-//   "Stop a Google Cloud Workstation",
-//   {
-//     workstation_name: z.string().describe("Full workstation resource name"),
-//   },
-//   async ({ workstation_name }) => {
-//     const response = await stopGoogleWorkstation(workstation_name);
+      let token = tokens.token;
+      const result = await getScriptTemplate(id, token);
 
-//     if (!response.success) {
-//       return {
-//         isError: true,
-//         content: [
-//           {
-//             type: "text",
-//             text: `Error stopping Google Workstation: ${response.error?.message || 'Unknown error'}`,
-//           },
-//         ],
-//       };
-//     }
+      if (!result.success) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: `❌ Error retrieving script template: ${result.error}`,
+            },
+          ],
+        };
+      }
 
-//     return {
-//       content: [
-//         {
-//           type: "text",
-//           text: JSON.stringify(response, null, 2),
-//         },
-//       ],
-//     };
-//   }
-// );
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result.script, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: `❌ Error retrieving script template: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          },
+        ],
+      };
+    }
+  }
+);
 
-// server.tool(
-//   "get-google-workstation",
-//   "Get details of a Google Cloud Workstation",
-//   {
-//     workstation_name: z.string().describe("Full workstation resource name"),
-//   },
-//   async ({ workstation_name }) => {
-//     const response = await getGoogleWorkstation(workstation_name);
+server.tool(
+  "list-script-templates",
+  "List all script templates for the current user, optionally filtered by tags",
+  ListScriptsSchema,
+  async ({ tags }) => {
+    try {
+      const defaultUserId = "keyboard-mcp-user";
+      let tokens = await wsManager?.sendAndWaitForTokenResponse({
+        "type": "request-token",
+        "requestId": "optional-unique-id"
+      }, 3000)
+      let token = tokens.token;
+      const result = await listScriptTemplates(token, tags);
 
-//     if (!response.success) {
-//       return {
-//         isError: true,
-//         content: [
-//           {
-//             type: "text",
-//             text: `Error getting Google Workstation: ${response.error?.message || 'Unknown error'}`,
-//           },
-//         ],
-//       };
-//     }
+      if (!result.success) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: `❌ Error listing script templates: ${result.error}`,
+            },
+          ],
+        };
+      }
 
-//     return {
-//       content: [
-//         {
-//           type: "text",
-//           text: JSON.stringify(response, null, 2),
-//         },
-//       ],
-//     };
-//   }
-// );
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              count: result.scripts?.length || 0,
+              scripts: result.scripts || [],
+              filteredByTags: tags ? tags : null
+            }, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: `❌ Error listing script templates: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          },
+        ],
+      };
+    }
+  }
+);
 
-// server.tool(
-//   "get-google-workstations-console-url",
-//   "Get the Google Cloud Console URL for managing workstations",
-//   {
-//     project_id: z.string().optional().describe("Google Cloud Project ID (optional)"),
-//   },
-//   async ({ project_id }) => {
-//     const consoleUrl = getGoogleWorkstationsConsoleUrl(project_id);
+server.tool(
+  "update-script-template",
+  "Update an existing script template",
+  UpdateScriptSchema,
+  async ({ id, name, description, schema, script, tags }) => {
+    try {
+      const defaultUserId = "keyboard-mcp-user";
+      const updates: any = {};
+      if (name !== undefined) updates.name = name;
+      if (description !== undefined) updates.description = description;
+      if (schema !== undefined) updates.schema = schema;
+      if (script !== undefined) updates.script = script;
+      if (tags !== undefined) updates.tags = tags;
 
-//     return {
-//       content: [
-//         {
-//           type: "text",
-//           text: JSON.stringify({
-//             success: true,
-//             consoleUrl,
-//             message: "Visit this URL to create and manage Google Cloud Workstations"
-//           }, null, 2),
-//         },
-//       ],
-//     };
-//   }
-// );
+      let tokens = await wsManager?.sendAndWaitForTokenResponse({
+        "type": "request-token",
+        "requestId": "optional-unique-id"
+      }, 3000)
+      let token = tokens.token;
+      const result = await updateScriptTemplate(id, token, updates);
 
-// server.tool(
-//   "start-workstation-tcp-tunnel",
-//   "Start a TCP tunnel to a Google Cloud Workstation",
-//   {
-//     project_id: z.string().describe("Google Cloud Project ID"),
-//     cluster: z.string().describe("Workstation cluster ID"),
-//     config: z.string().describe("Workstation configuration ID"),
-//     region: z.string().describe("Region (e.g., us-central1)"),
-//     workstation_id: z.string().describe("Workstation ID"),
-//     remote_port: z.number().optional().describe("Remote port (default: 80)"),
-//     local_host_port: z.string().optional().describe("Local host port (default: :8080)"),
-//   },
-//   async ({ project_id, cluster, config, region, workstation_id, remote_port, local_host_port }) => {
-//     const response = await startWorkstationTcpTunnel({
-//       projectId: project_id,
-//       cluster,
-//       config,
-//       region,
-//       workstationId: workstation_id,
-//       remotePort: remote_port,
-//       localHostPort: local_host_port,
-//     });
+      if (!result.success) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: `❌ Error updating script template: ${result.error}`,
+            },
+          ],
+        };
+      }
 
-//     if (!response.success) {
-//       return {
-//         isError: true,
-//         content: [
-//           {
-//             type: "text",
-//             text: `Error starting workstation TCP tunnel: ${response.error?.message || 'Unknown error'}`,
-//           },
-//         ],
-//       };
-//     }
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              message: "Script template updated successfully",
+              id,
+              updates
+            }, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: `❌ Error updating script template: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          },
+        ],
+      };
+    }
+  }
+);
 
-//     return {
-//       content: [
-//         {
-//           type: "text",
-//           text: JSON.stringify(response, null, 2),
-//         },
-//       ],
-//     };
-//   }
-// );
+server.tool(
+  "delete-script-template",
+  "Delete a script template by ID",
+  DeleteScriptSchema,
+  async ({ id }) => {
+    try {
+      const defaultUserId = "keyboard-mcp-user";
+      let tokens = await wsManager?.sendAndWaitForTokenResponse({
+        "type": "request-token",
+        "requestId": "optional-unique-id"
+      }, 3000)
+      let token = tokens.token;
+      const result = await deleteScriptTemplate(id, token);
 
-// server.tool(
-//   "execute-code-on-workstation-tunnel",
-//   "Execute code on a Google Cloud Workstation via localhost:8080 tunnel",
-//   {
-//     code: z.string().describe("The JavaScript/Node.js code to execute"),
-//     security_token: z.string().describe("Execution token from the 'evaluate' tool - REQUIRED for code execution"),
-//     environment_variables: z.array(z.string()).optional().describe("Environment variable names available in the workstation"),
-//     doc_resources: z.array(z.string()).optional().describe("Documentation resources to reference"),
-//     port: z.number().optional().describe("Local port (default: 8080)"),
-//   },
-//   async ({ code, security_token, environment_variables, doc_resources, port }) => {
-//     // Validate execution token
-//     if (security_token !== currentExecutionToken) {
-//       return {
-//         isError: true,
-//         content: [
-//           {
-//             type: "text",
-//             text: `❌ SECURITY ERROR: Invalid or expired security token. Please call the 'evaluate' tool first to get the current token.`,
-//           },
-//         ],
-//       };
-//     }
+      if (!result.success) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: `❌ Error deleting script template: ${result.error}`,
+            },
+          ],
+        };
+      }
 
-//     // Generate new execution token for next execution
-//     currentExecutionToken = generateExecutionToken();
-//     console.error(`🔒 New execution token generated: ${currentExecutionToken}`);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              message: "Script template deleted successfully",
+              id
+            }, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: `❌ Error deleting script template: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          },
+        ],
+      };
+    }
+  }
+);
 
-//     const response = await executeCodeOnWorkstationTunnel({
-//       code,
-//       environmentVariablesNames: environment_variables,
-//       docResources: doc_resources,
-//       port,
-//     });
+server.tool(
+  "search-script-templates",
+  "Search script templates by name or description",
+  SearchScriptsSchema,
+  async ({ searchTerm }) => {
+    try {
+      const defaultUserId = "keyboard-mcp-user";
+      let tokens = await wsManager?.sendAndWaitForTokenResponse({
+        "type": "request-token",
+        "requestId": "optional-unique-id"
+      }, 3000)
+      let token = tokens.token;
+      const result = await searchScriptTemplates(token, searchTerm);
 
-//     if (!response.success) {
-//       return {
-//         isError: true,
-//         content: [
-//           {
-//             type: "text",
-//             text: `Error executing code on workstation tunnel: ${response.error?.message || 'Unknown error'}`,
-//           },
-//         ],
-//       };
-//     }
+      if (!result.success) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: `❌ Error searching script templates: ${result.error}`,
+            },
+          ],
+        };
+      }
 
-//     return {
-//       content: [
-//         {
-//           type: "text",
-//           text: JSON.stringify({
-//             ...response,
-//             securityNote: "✅ Code executed successfully. Security token has been refreshed. Call 'evaluate' again before next execution."
-//           }, null, 2),
-//         },
-//       ],
-//     };
-//   }
-// );
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              searchTerm,
+              count: result.scripts?.length || 0,
+              scripts: result.scripts || []
+            }, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: `❌ Error searching script templates: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          },
+        ],
+      };
+    }
+  }
+);
 
-// server.tool(
-//   "fetch-workstation-tunnel-resources",
-//   "Fetch environment variables and resources available on the workstation tunnel (localhost:8080)",
-//   {
-//     port: z.number().optional().describe("Local port (default: 8080)"),
-//   },
-//   async ({ port }) => {
-//     const response = await fetchWorkstationTunnelResources({
-//       port,
-//     });
+server.tool(
+  "interpolate-script",
+  "Interpolate a script template with provided variables and return the executable code",
+  InterpolateScriptSchema,
+  async ({ id, variables }) => {
+    try {
+      const defaultUserId = "keyboard-mcp-user";
+      // First, get the script template
+      let tokens = await wsManager?.sendAndWaitForTokenResponse({
+        "type": "request-token",
+        "requestId": "optional-unique-id"
+      }, 3000)
+      let token = tokens.token;
+      const templateResult = await getScriptTemplate(id, token);
 
-//     if (!response.success) {
-//       return {
-//         isError: true,
-//         content: [
-//           {
-//             type: "text",
-//             text: `Error fetching workstation tunnel resources: ${response.error?.message || 'Unknown error'}`,
-//           },
-//         ],
-//       };
-//     }
+      if (!templateResult.success) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: `❌ Error retrieving script template: ${templateResult.error}`,
+            },
+          ],
+        };
+      }
 
-//     return {
-//       content: [
-//         {
-//           type: "text",
-//           text: JSON.stringify(response, null, 2),
-//         },
-//       ],
-//     };
-//   }
-// );
+      const script = templateResult.script!;
+      
+      // Interpolate the template
+      const interpolated = interpolateScript(script.script, variables);
 
-// server.tool(
-//   "list-google-workstation-clusters",
-//   "List Google Cloud Workstation clusters in a specific location",
-//   {
-//     project_id: z.string().describe("Google Cloud Project ID"),
-//     location: z.string().describe("Location/region (e.g., us-central1)"),
-//   },
-//   async ({ project_id, location }) => {
-//     const response = await listGoogleWorkstationClusters(project_id, location);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              scriptId: id,
+              scriptName: script.name,
+              scriptDescription: script.description,
+              template: script.script,
+              variables: variables,
+              interpolatedCode: interpolated.interpolated,
+              availableVariables: Object.keys(script.schema || {}),
+              tags: script.tags
+            }, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: `❌ Error interpolating script: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          },
+        ],
+      };
+    }
+  }
+);
 
-//     if (!response.success) {
-//       return {
-//         isError: true,
-//         content: [
-//           {
-//             type: "text",
-//             text: `Error listing workstation clusters: ${response.error?.message || 'Unknown error'}`,
-//           },
-//         ],
-//       };
-//     }
+server.tool(
+  "evaluate_using_shortcut",
+  "Evaluate a saved script template by interpolating it with provided variables. This bypasses the planning token requirement and directly creates an execution token for the interpolated script.",
+  {
+    script_id: z.string().describe("ID of the saved script template to use"),
+    variables: z.record(z.string(), z.any()).describe("Variables to interpolate into the script template"),
+    explanation_of_usage: z.string().describe("A brief explanation of how you're using this script and what it will accomplish")
+  },
+  async ({ script_id, variables, explanation_of_usage }) => {
+    try {
+      const defaultUserId = "keyboard-mcp-user";
+      
+      // Get the script template
+      let tokens = await wsManager?.sendAndWaitForTokenResponse({
+        "type": "request-token",
+        "requestId": "optional-unique-id"
+      }, 3000)
+      let token = tokens.token;
+      const templateResult = await getScriptTemplate(script_id, token);
+      if (!templateResult.success) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: `❌ Error retrieving script template: ${templateResult.error}`,
+            },
+          ],
+        };
+      }
 
-//     return {
-//       content: [
-//         {
-//           type: "text",
-//           text: JSON.stringify(response, null, 2),
-//         },
-//       ],
-//     };
-//   }
-// );
+      const script = templateResult.script!;
+      
+      // Interpolate the template with variables
+      const interpolated = interpolateScript(script.script, variables);
+      
+      // Generate execution token for the interpolated script
+      const executionToken = generateExecutionToken(defaultUserId);
+      
+      // Store the interpolated code in the execution collection
+      executionCodeCollection[defaultUserId][executionToken] = {
+        status: 'approved',
+        code: interpolated.interpolated,
+        explanation: `${explanation_of_usage}\n\nUsing script template: ${script.name}\nDescription: ${script.description}`,
+        timestamp: new Date().toISOString(),
+        templateId: script_id,
+        templateName: script.name,
+        variables: variables
+      };
 
-// server.tool(
-//   "get-workstation-resources",
-//   "Get comprehensive workstation resources including project ID, clusters, and configurations",
-//   {
-//     location: z.string().optional().describe("Location/region (default: us-central1)"),
-//   },
-//   async ({ location }) => {
-//     const response = await getWorkstationResources(location);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              message: "✅ Script template evaluated and execution token generated",
+              executionToken: executionToken,
+              scriptTemplate: {
+                id: script_id,
+                name: script.name,
+                description: script.description,
+                tags: script.tags
+              },
+              interpolatedCode: interpolated.interpolated,
+              variables: variables,
+              explanation: explanation_of_usage,
+              instructions: [
+                "Your script has been evaluated and is ready for execution",
+                `Use the execution token '${executionToken}' with the 'execute' tool`,
+                "This bypassed the planning phase since you used a pre-saved script template"
+              ]
+            }, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: `❌ Error evaluating script template: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          },
+        ],
+      };
+    }
+  }
+);
 
-//     if (!response.success) {
-//       return {
-//         isError: true,
-//         content: [
-//           {
-//             type: "text",
-//             text: `Error getting workstation resources: ${response.error?.message || 'Unknown error'}`,
-//           },
-//         ],
-//       };
-//     }
 
-//     return {
-//       content: [
-//         {
-//           type: "text",
-//           text: JSON.stringify(response, null, 2),
-//         },
-//       ],
-//     };
-//   }
-// );
 
 async function main() {
   const transport = new StdioServerTransport();
