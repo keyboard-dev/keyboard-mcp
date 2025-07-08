@@ -1,0 +1,42 @@
+{
+  "dxt_version": "0.1",
+  "name": "keyboard-mcp",
+  "display_name": "keyboard(local)",
+  "version": "1.0.0",
+  "description": "Allow Claude to do anything securely with remote code execution and human approval systems",
+  "author": {
+    "name": "keyboard.dev"
+  },
+  "homepage": "https://www.keyboard.dev",
+  "documentation": "https://docs.keyboard.dev",
+  "server": {
+    "type": "node",
+    "entry_point": "build/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/build/index.js"
+      ],
+      "env": {
+        "GITHUB_PAT_TOKEN": "${user_config.GITHUB_PAT_TOKEN}",
+        "ENCRYPT_MESSAGES": "${user_config.ENCRYPT_MESSAGES}"
+      }
+    }
+  },
+  "user_config": {
+    "GITHUB_PAT_TOKEN": {
+      "type": "string",
+      "title": "GitHub PAT with codespaces privelleges",
+      "description": "Your API key for authentication",
+      "sensitive": true,
+      "required": true
+    },
+    "ENCRYPT_MESSAGES": {
+      "type": "boolean",
+      "title": "Add additional Encryption Messages",
+      "description": "Add extra encryption when executing code on your GitHub Codespace, read the docs for more information",
+      "optional": true
+    }
+  },
+  "license": "Apache"
+}
