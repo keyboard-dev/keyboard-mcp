@@ -25,7 +25,17 @@ import {
 import { createInteractiveDocsCodespace, listActiveCodespacesForRepo, listAllCodespacesForRepo, generateCodespacePortUrl, fetchKeyNameAndResources, deleteCodespace, stopCodespace, executeCodeOnCodespace } from './codespaces.js';
 
 let githubPatToken = process.env.GITHUB_PAT_TOKEN || "";
-let encryptMessages = process.env.ENCRYPT_MESSAGES || true
+let encryptMessages = process.env.ENCRYPT_MESSAGES || true;
+let socketKey = process.env.SOCKET_KEY || "";
+
+// Validate SOCKET_KEY is provided
+if (!socketKey) {
+  console.error("❌ SOCKET_KEY environment variable is required for secure WebSocket connections");
+  console.error("📋 Get the key from the approver app settings and set it as an environment variable:");
+  console.error("   export SOCKET_KEY=your_websocket_key_here");
+  console.error("   or add SOCKET_KEY=your_websocket_key_here to your .env file");
+  process.exit(1);
+}
 
 
 // Create WebSocketManager instance
@@ -94,21 +104,23 @@ const server = new McpServer({
 // Add WebSocket connection tool
 server.tool(
   "connect-websocket",
-  "Connect to the Electron app's WebSocket server",
+  "Connect to the Electron app's WebSocket server using secure connection key",
   {
-    url: z.string().default("ws://localhost:8080").describe("WebSocket server URL"),
     reconnectInterval: z.number().default(3000).describe("Reconnection interval in milliseconds"),
     maxReconnectAttempts: z.number().default(5).describe("Maximum number of reconnection attempts"),
     autoReconnect: z.boolean().default(true).describe("Whether to automatically reconnect")
   },
-  async ({ url, reconnectInterval, maxReconnectAttempts, autoReconnect }) => {
+  async ({ reconnectInterval, maxReconnectAttempts, autoReconnect }) => {
     try {
       if (wsManager) {
         wsManager.disconnect();
       }
 
+      // Build secure WebSocket URL with the connection key
+      const secureUrl = `ws://127.0.0.1:8080?key=${socketKey}`;
+
       wsManager = new WebSocketManager({
-        url,
+        url: secureUrl,
         reconnectInterval,
         maxReconnectAttempts,
         autoReconnect
@@ -124,12 +136,17 @@ server.tool(
             text: JSON.stringify({
               success: true,
               status: wsManager.getConnectionState(),
-              message: "WebSocket manager initialized",
+              message: "Secure WebSocket connection established",
               config: {
-                url,
+                url: "ws://127.0.0.1:8080?key=[REDACTED]", // Don't expose the key in logs
                 reconnectInterval,
                 maxReconnectAttempts,
                 autoReconnect
+              },
+              security: {
+                keyProvided: true,
+                localhostOnly: true,
+                encrypted: encryptMessages
               }
             }, null, 2)
           }
@@ -143,7 +160,12 @@ server.tool(
             type: "text",
             text: JSON.stringify({
               success: false,
-              error: error instanceof Error ? error.message : "Unknown error occurred"
+              error: error instanceof Error ? error.message : "Unknown error occurred",
+              troubleshooting: [
+                "Ensure the approver app is running",
+                "Verify the SOCKET_KEY environment variable matches the key from the approver app",
+                "Check that the approver app WebSocket server is listening on localhost:8080"
+              ]
             }, null, 2)
           }
         ]
