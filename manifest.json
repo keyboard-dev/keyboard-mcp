@@ -19,7 +19,8 @@
       ],
       "env": {
         "GITHUB_PAT_TOKEN": "${user_config.GITHUB_PAT_TOKEN}",
-        "ENCRYPT_MESSAGES": "${user_config.ENCRYPT_MESSAGES}"
+        "ENCRYPT_MESSAGES": "${user_config.ENCRYPT_MESSAGES}",
+        "SOCKET_KEY": "${user_config.SOCKET_KEY}"
       }
     }
   },
@@ -28,6 +29,13 @@
       "type": "string",
       "title": "GitHub PAT with codespaces privelleges",
       "description": "Your API key for authentication",
+      "sensitive": true,
+      "required": true
+    },
+    "SOCKET_KEY": {
+      "type": "string",
+      "title": "WebSocket Connection Key",
+      "description": "The key to connect to the WebSocket server",
       "sensitive": true,
       "required": true
     },
