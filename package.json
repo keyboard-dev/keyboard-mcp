@@ -7,11 +7,7 @@
     "keyboard-mcp": "./build/index.js"
   },
   "scripts": {
-    "build": "tsc && chmod 755 build/index.js",
-    "test:google": "npx ts-node src/test-google-workstations.ts",
-    "test:google-vms": "npx ts-node src/test-google-vms.ts",
-    "test:aws": "npx ts-node src/test-aws.ts",
-    "test:aws-simple": "npx ts-node src/test-aws-simple.ts"
+    "build": "tsc && chmod 755 build/index.js"
   },
   "files": [
     "build"
